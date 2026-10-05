@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Pianola
+Exec=pianola
+Icon=tech.redfoxlabs.Pianola
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true

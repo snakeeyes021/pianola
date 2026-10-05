@@ -1,0 +1,8 @@
+# List of source files containing translatable strings.
+# Please keep this file sorted alphabetically.
+data/tech.redfoxlabs.Pianola.desktop.in
+data/tech.redfoxlabs.Pianola.metainfo.xml.in
+data/tech.redfoxlabs.Pianola.gschema.xml
+src/main.py
+src/window.py
+src/window.ui

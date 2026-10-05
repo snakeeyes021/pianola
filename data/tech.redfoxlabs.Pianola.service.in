@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=tech.redfoxlabs.Pianola
+Exec=@bindir@/pianola --gapplication-service
