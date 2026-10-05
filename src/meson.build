@@ -30,6 +30,7 @@ pianola_sources = [
   '__init__.py',
   'main.py',
   'window.py',
+  'archive.py',
 ]
 
 install_data(pianola_sources, install_dir: moduledir)
