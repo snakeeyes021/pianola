@@ -46,6 +46,8 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.archive_mgr = ArchiveManager()
         self.player = AudioPlayer()
         self.canvas = TimelineCanvas(self.player)
+        self.is_archive_mode: bool = True
+        self.current_single_file_path: Optional[str] = None
 
         # Connect canvas callbacks
         self.canvas.on_star_toggled = self._on_star_toggled
@@ -174,11 +176,24 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.add_action(action)
 
     def _setup_calendar_popover(self):
-        popover = Gtk.Popover()
-        calendar = Gtk.Calendar()
-        calendar.connect("day-selected", self._on_calendar_day_selected)
-        popover.set_child(calendar)
-        self.btn_calendar.set_popover(popover)
+        self.calendar_popover = Gtk.Popover()
+        self.calendar = Gtk.Calendar()
+        self.calendar.connect("day-selected", self._on_calendar_day_selected)
+        self.calendar_popover.set_child(self.calendar)
+        self.calendar_popover.connect("closed", self._reset_calendar_to_current_date)
+        self.calendar_popover.connect("map", self._reset_calendar_to_current_date)
+        self.btn_calendar.set_popover(self.calendar_popover)
+
+    def _reset_calendar_to_current_date(self, *args):
+        if not self.canvas.session_items:
+            return
+        curr_t = self.player.current_time
+        curr_item = self.canvas.get_session_at_time(curr_t)
+        if not curr_item:
+            curr_item = self.canvas.session_items[0]
+        dt = curr_item.session.start_time
+        gdt = GLib.DateTime.new_local(dt.year, dt.month, dt.day, 0, 0, 0)
+        self.calendar.select_day(gdt)
 
     def _setup_drag_source(self):
         """Enable dragging marquee selection or active file directly from timeline into DAWs, Notation, or Nautilus."""
@@ -252,6 +267,40 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         return Gdk.ContentProvider.new_union(providers)
 
+    def _update_nav_buttons(self):
+        """Update sensitivity and tooltips for prev/next buttons depending on mode."""
+        if self.is_archive_mode:
+            self.btn_prev_day.set_tooltip_text(_("Previous Day"))
+            self.btn_next_day.set_tooltip_text(_("Next Day"))
+            active_day = self.canvas.active_day
+            if active_day and self.canvas.ordered_days:
+                idx = self.canvas.ordered_days.index(active_day)
+                self.btn_prev_day.set_sensitive(idx > 0 or self.player.current_time > active_day.start_offset + 0.5)
+                self.btn_next_day.set_sensitive(idx < len(self.canvas.ordered_days) - 1)
+            else:
+                self.btn_prev_day.set_sensitive(False)
+                self.btn_next_day.set_sensitive(False)
+        else:
+            self.btn_prev_day.set_tooltip_text(_("Previous File"))
+            self.btn_next_day.set_tooltip_text(_("Next File"))
+            if self.current_single_file_path:
+                folder = os.path.dirname(self.current_single_file_path)
+                try:
+                    siblings = sorted([
+                        f for f in os.listdir(folder)
+                        if f.lower().endswith((".mid", ".midi")) and not f.startswith(".")
+                    ], key=lambda s: s.lower())
+                    curr_name = os.path.basename(self.current_single_file_path)
+                    idx = siblings.index(curr_name) if curr_name in siblings else -1
+                    self.btn_prev_day.set_sensitive(idx > 0)
+                    self.btn_next_day.set_sensitive(0 <= idx < len(siblings) - 1)
+                except Exception:
+                    self.btn_prev_day.set_sensitive(False)
+                    self.btn_next_day.set_sensitive(False)
+            else:
+                self.btn_prev_day.set_sensitive(False)
+                self.btn_next_day.set_sensitive(False)
+
     def load_archive(self):
         """Default launch: check ~/.local/share/midikeep/index.db."""
         if not self.archive_mgr.archive_exists():
@@ -278,6 +327,9 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         count = len(sessions)
         self.window_title.set_subtitle(f"Midikeep Archive • {count} {'take' if count == 1 else 'takes'}")
+        self.is_archive_mode = True
+        self.current_single_file_path = None
+        self._update_nav_buttons()
 
     def load_file(self, filepath: str):
         """Open an external single MIDI file directly."""
@@ -288,6 +340,9 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.player.set_multi_track_mode(self.btn_multi_track.get_active())
             self.canvas.jump_to_archive_start()
             self.window_title.set_subtitle(os.path.basename(filepath))
+            self.is_archive_mode = False
+            self.current_single_file_path = os.path.abspath(filepath)
+            self._update_nav_buttons()
         except Exception as e:
             dialog = Adw.AlertDialog(
                 heading="Could Not Open File",
@@ -328,31 +383,51 @@ class PianolaWindow(Adw.ApplicationWindow):
         ))
 
     def _on_ui_tick(self, widget, frame_clock):
-        if self.player.is_playing or self.canvas.scrub_active:
+        # Update autoscroll motion if active
+        if self.canvas.autoscroll_active:
+            dx = self.canvas.autoscroll_current_x - self.canvas.autoscroll_origin_x
+            if abs(dx) > 6.0:
+                sign = 1.0 if dx > 0 else -1.0
+                speed = (abs(dx) - 6.0) * sign * 0.45
+                hadj = self.canvas.hadj
+                max_val = max(0.0, hadj.get_upper() - hadj.get_page_size())
+                hadj.set_value(max(0.0, min(max_val, hadj.get_value() + speed)))
+                self.canvas.queue_draw()
+                self.minimap.queue_draw()
+
+        if self.player.is_playing or self.canvas.scrub_active or self.canvas.autoscroll_active:
             self.keyboard.queue_draw()
-        if self.player.is_playing:
-            cur_t = self.player.current_time
+
+        # Update time display scoped to currently active day
+        active_day = self.canvas.active_day
+        cur_t = self.player.current_time
+        if active_day:
+            day_cur_t = max(0.0, min(cur_t - active_day.start_offset, active_day.duration))
+            day_tot_t = active_day.duration
+            cur_m, cur_s = int(day_cur_t // 60), int(day_cur_t % 60)
+            tot_m, tot_s = int(day_tot_t // 60), int(day_tot_t % 60)
+        else:
             cur_m, cur_s = int(cur_t // 60), int(cur_t % 60)
             tot = self.canvas.total_timeline_duration
             tot_m, tot_s = int(tot // 60), int(tot % 60)
-            self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
+        self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
+        if self.player.is_playing:
             self.canvas.queue_draw()
             self.minimap.queue_draw()
 
             # Auto-scroll canvas viewport if playhead approaches right edge
-            # Only auto-scroll when user is not actively dragging and playhead is on-screen
             if not self.minimap.is_dragging and not self.canvas._drag_start_time:
                 hadj = self.canvas.hadj
                 cur_x = self.canvas.time_to_x(cur_t)
                 page_size = hadj.get_page_size()
                 val = hadj.get_value()
                 max_val = max(0.0, hadj.get_upper() - page_size)
-                # Only follow forward if the playhead is currently inside the visible viewport;
-                # if user manually scrolled away to inspect another section, do not yank them back.
                 if val <= cur_x <= val + page_size:
                     if cur_x > val + page_size - 80:
                         hadj.set_value(min(max_val, cur_x - 80))
+
+        self._update_nav_buttons()
         return GLib.SOURCE_CONTINUE
 
     def _on_player_tick(self, current_time: float):
@@ -419,54 +494,54 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.minimap.queue_draw()
 
     def _on_prev_day_clicked(self, btn):
-        if not self.canvas.session_items:
-            return
-        curr_t = self.player.current_time
-        curr_item = self.canvas.session_items[0]
-        for item in self.canvas.session_items:
-            if item.timeline_offset <= curr_t + 0.1:
-                curr_item = item
-            else:
-                break
-        curr_date = curr_item.session.start_time.date()
-
-        all_days = sorted(list({item.session.start_time.date() for item in self.canvas.session_items}))
-        prev_days = [d for d in all_days if d < curr_date]
-        if prev_days:
-            target_day = prev_days[-1]
-            target_item = next(it for it in self.canvas.session_items if it.session.start_time.date() == target_day)
-            self.player.seek(target_item.timeline_offset)
-            self.scroll_to_time(target_item.timeline_offset)
+        if self.is_archive_mode:
+            target_day = self.canvas.jump_to_prev_day()
+            if target_day:
+                self.scroll_to_time(target_day.start_offset)
+            self._update_nav_buttons()
+            self.minimap.queue_draw()
         else:
-            first = self.canvas.session_items[0]
-            self.player.seek(first.timeline_offset)
-            self.scroll_to_time(first.timeline_offset)
-        self.minimap.queue_draw()
+            if not self.current_single_file_path:
+                return
+            folder = os.path.dirname(self.current_single_file_path)
+            try:
+                siblings = sorted([
+                    f for f in os.listdir(folder)
+                    if f.lower().endswith((".mid", ".midi")) and not f.startswith(".")
+                ], key=lambda s: s.lower())
+                curr_name = os.path.basename(self.current_single_file_path)
+                if curr_name in siblings:
+                    idx = siblings.index(curr_name)
+                    if idx > 0:
+                        prev_path = os.path.join(folder, siblings[idx - 1])
+                        self.load_file(prev_path)
+            except Exception as e:
+                print(f"Error navigating to previous file: {e}")
 
     def _on_next_day_clicked(self, btn):
-        if not self.canvas.session_items:
-            return
-        curr_t = self.player.current_time
-        curr_item = self.canvas.session_items[0]
-        for item in self.canvas.session_items:
-            if item.timeline_offset <= curr_t + 0.1:
-                curr_item = item
-            else:
-                break
-        curr_date = curr_item.session.start_time.date()
-
-        all_days = sorted(list({item.session.start_time.date() for item in self.canvas.session_items}))
-        next_days = [d for d in all_days if d > curr_date]
-        if next_days:
-            target_day = next_days[0]
-            target_item = next(it for it in self.canvas.session_items if it.session.start_time.date() == target_day)
-            self.player.seek(target_item.timeline_offset)
-            self.scroll_to_time(target_item.timeline_offset)
+        if self.is_archive_mode:
+            target_day = self.canvas.jump_to_next_day()
+            if target_day:
+                self.scroll_to_time(target_day.start_offset)
+            self._update_nav_buttons()
+            self.minimap.queue_draw()
         else:
-            last = self.canvas.session_items[-1]
-            self.player.seek(last.timeline_offset)
-            self.scroll_to_time(last.timeline_offset)
-        self.minimap.queue_draw()
+            if not self.current_single_file_path:
+                return
+            folder = os.path.dirname(self.current_single_file_path)
+            try:
+                siblings = sorted([
+                    f for f in os.listdir(folder)
+                    if f.lower().endswith((".mid", ".midi")) and not f.startswith(".")
+                ], key=lambda s: s.lower())
+                curr_name = os.path.basename(self.current_single_file_path)
+                if curr_name in siblings:
+                    idx = siblings.index(curr_name)
+                    if idx < len(siblings) - 1:
+                        next_path = os.path.join(folder, siblings[idx + 1])
+                        self.load_file(next_path)
+            except Exception as e:
+                print(f"Error navigating to next file: {e}")
 
 
     def _on_action_prev_section(self, action, param):

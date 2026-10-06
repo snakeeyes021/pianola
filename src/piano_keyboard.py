@@ -13,7 +13,7 @@ highlighting Middle C (C4) and lighting up active sounding pitches in real time.
 import math
 from typing import Set, Tuple
 import cairo
-from .archive import get_gm_instrument_icon, get_track_color
+from .archive import get_track_color
 
 from gi.repository import Gtk, Gdk, GLib, Adw
 from .timeline_canvas import TimelineCanvas
@@ -117,21 +117,32 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
                 cr.rectangle(0, lane_top + 4.0, 3.5, lane_h - 8.0)
                 cr.fill()
 
-                icon = get_gm_instrument_icon(trk.program, trk.channel)
-                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-                cr.set_font_size(15.0)
-                cr.set_source_rgb(1.0, 1.0, 1.0) if is_dark else cr.set_source_rgb(0.1, 0.1, 0.1)
-                cr.move_to(10.0, lane_top + (lane_h / 2.0) - 1.0)
-                cr.show_text(icon)
+                pill_x = 7.0
+                pill_y = lane_top + (lane_h / 2.0) - 10.0
+                pill_w = 34.0
+                pill_h = 20.0
+                r = 4.0
 
+                # Elegant rounded badge background
+                cr.set_source_rgba(base_r, base_g, base_b, 0.25 if not is_sounding else 0.45)
+                cr.new_sub_path()
+                cr.arc(pill_x + pill_w - r, pill_y + r, r, -math.pi/2, 0)
+                cr.arc(pill_x + pill_w - r, pill_y + pill_h - r, r, 0, math.pi/2)
+                cr.arc(pill_x + r, pill_y + pill_h - r, r, math.pi/2, math.pi)
+                cr.arc(pill_x + r, pill_y + r, r, math.pi, 3*math.pi/2)
+                cr.close_path()
+                cr.fill()
+
+                # Clean GNOME typography: CH <num>
                 cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-                cr.set_font_size(7.5)
+                cr.set_font_size(9.0)
                 if is_dark:
-                    cr.set_source_rgba(0.7, 0.7, 0.75, 0.8)
+                    cr.set_source_rgb(0.95, 0.95, 0.98)
                 else:
-                    cr.set_source_rgba(0.35, 0.35, 0.40, 0.9)
-                ch_label = f"Ch {trk.channel + 1}"
-                cr.move_to(8.0, lane_top + (lane_h / 2.0) + 12.0)
+                    cr.set_source_rgb(0.12, 0.12, 0.18)
+                ch_label = f"CH {trk.channel + 1}"
+                ext = cr.text_extents(ch_label)
+                cr.move_to(pill_x + ((pill_w - ext.width) / 2.0) - ext.x_bearing, pill_y + ((pill_h - ext.height) / 2.0) - ext.y_bearing)
                 cr.show_text(ch_label)
 
                 if is_sounding:

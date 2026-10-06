@@ -200,7 +200,7 @@ def test_sustain_pedal_parsing():
 def test_multi_track_parsing():
     print('[TEST] test_multi_track_parsing...')
     import struct, tempfile
-    from src.archive import get_gm_instrument_name, get_gm_instrument_icon, get_track_color
+    from src.archive import get_gm_instrument_name, get_track_color
 
     # Header: Type 1, 2 tracks, 480 ticks/quarter
     header = struct.pack('>4sIHHH', b'MThd', 6, 1, 2, 480)
@@ -235,8 +235,6 @@ def test_multi_track_parsing():
         assert 'Piano' in data.tracks[1].instrument_name
         assert data.tracks[1].min_pitch == 48 and data.tracks[1].max_pitch == 48
 
-        assert get_gm_instrument_icon(40) == '🎻'
-        assert get_gm_instrument_icon(0) == '🎹'
         color_v = get_track_color(program=40, channel=0)
         color_p = get_track_color(program=0, channel=1)
         assert color_v != color_p

@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple, Callable
 import cairo
 from gi.repository import Gtk, Gdk, GLib, Adw
 
-from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData, TrackInfo, get_track_color, get_gm_instrument_name, get_gm_instrument_icon
+from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData, TrackInfo, get_track_color, get_gm_instrument_name
 from .player import AudioPlayer
 
 
@@ -36,6 +36,20 @@ class CollapsedGap:
         self.saved = self.real_duration - self.visual_duration
         self.vis_start: float = 0.0
         self.vis_end: float = 0.0
+
+
+class DayGroup:
+    """Group of sessions belonging to a specific calendar date."""
+
+    def __init__(self, date_val):
+        self.date = date_val
+        self.items: List['TimelineSessionItem'] = []
+        self.start_offset: float = 0.0
+        self.end_offset: float = 0.0
+
+    @property
+    def duration(self) -> float:
+        return max(0.5, self.end_offset - self.start_offset)
 
 
 class TimelineSessionItem:
@@ -72,6 +86,17 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.px_per_sec: float = self.DEFAULT_PX_PER_SEC
         self.multi_track_mode: bool = False
         self.tracks: List[TrackInfo] = []
+        self.day_groups: dict = {}
+        self.ordered_days: List[DayGroup] = []
+        self.hover_mouse_x: float = 400.0
+        self.hover_mouse_y: float = 160.0
+
+        # Middle-mouse autoscroll state
+        self.autoscroll_active: bool = False
+        self.autoscroll_origin_x: float = 0.0
+        self.autoscroll_origin_y: float = 0.0
+        self.autoscroll_current_x: float = 0.0
+        self.autoscroll_current_y: float = 0.0
 
         # Selection state: (start_sec, end_sec) on real timeline
         self.selection_range: Optional[Tuple[float, float]] = None
@@ -179,6 +204,8 @@ class TimelineCanvas(Gtk.DrawingArea):
     def load_sessions(self, sessions: List[SessionRecord]):
         """Build continuous timeline with Silence Compacting spanning all sessions."""
         self.session_items.clear()
+        self.day_groups.clear()
+        self.ordered_days.clear()
         curr_offset = 0.0
 
         all_notes: List[NoteEvent] = []
@@ -189,6 +216,16 @@ class TimelineCanvas(Gtk.DrawingArea):
         for s in sessions:
             item = TimelineSessionItem(s, curr_offset)
             self.session_items.append(item)
+
+            d = s.start_time.date()
+            if d not in self.day_groups:
+                dg = DayGroup(d)
+                dg.start_offset = item.timeline_offset
+                self.day_groups[d] = dg
+                self.ordered_days.append(dg)
+            dg = self.day_groups[d]
+            dg.items.append(item)
+            dg.end_offset = max(dg.end_offset, item.end_timeline_offset)
 
             for n in item.midi_data.notes:
                 key_end = (n.played_end_time + curr_offset) if n.key_end_time is not None else None
@@ -241,6 +278,12 @@ class TimelineCanvas(Gtk.DrawingArea):
             )]
 
         self.total_timeline_duration = max(0.5, curr_offset - self.INTER_SESSION_GAP if self.session_items else 0.0)
+
+        if not self.ordered_days:
+            dummy_day = DayGroup(datetime.now().date())
+            dummy_day.start_offset = 0.0
+            dummy_day.end_offset = self.total_timeline_duration
+            self.ordered_days.append(dummy_day)
 
         # Build Collapsed Gaps for all pauses >= 3.0 seconds
         self._build_collapsed_gaps(all_sections)
@@ -341,16 +384,105 @@ class TimelineCanvas(Gtk.DrawingArea):
         viewport_w = float(self.get_width() or 800.0)
         self.hadj.set_page_size(viewport_w)
 
-    def set_zoom(self, px_per_sec: float):
+    def set_zoom(self, px_per_sec: float, pivot_x: Optional[float] = None):
+        if pivot_x is None:
+            viewport_w = float(self.get_width() or 800.0)
+            pivot_x = viewport_w / 2.0
+
+        old_val = self.hadj.get_value()
+        world_x = old_val + pivot_x
+        pivot_time = self.x_to_time(world_x)
+
         self.px_per_sec = max(self.MIN_PX_PER_SEC, min(self.MAX_PX_PER_SEC, px_per_sec))
         self._update_dimensions()
+
+        new_world_x = self.time_to_x(pivot_time)
+        new_val = new_world_x - pivot_x
+        max_val = max(0.0, self.hadj.get_upper() - self.hadj.get_page_size())
+        self.hadj.set_value(max(0.0, min(max_val, new_val)))
         self.queue_draw()
 
-    def zoom_in(self):
-        self.set_zoom(self.px_per_sec * 1.3)
+    def zoom_in(self, pivot_x: Optional[float] = None):
+        self.set_zoom(self.px_per_sec * 1.3, pivot_x=pivot_x)
 
-    def zoom_out(self):
-        self.set_zoom(self.px_per_sec / 1.3)
+    def zoom_out(self, pivot_x: Optional[float] = None):
+        self.set_zoom(self.px_per_sec / 1.3, pivot_x=pivot_x)
+
+    # --- Autoscroll & Day Helpers ---
+
+    def _start_autoscroll(self, x: float, y: float):
+        self.autoscroll_active = True
+        self.autoscroll_origin_x = x
+        self.autoscroll_origin_y = y
+        self.autoscroll_current_x = x
+        self.autoscroll_current_y = y
+        self.set_cursor_from_name("all-scroll")
+        self.queue_draw()
+
+    def _stop_autoscroll(self):
+        if self.autoscroll_active:
+            self.autoscroll_active = False
+            self.set_cursor_from_name("default")
+            self.queue_draw()
+
+    def get_day_at_time(self, t: float) -> Optional[DayGroup]:
+        if not self.ordered_days:
+            return None
+        for day in self.ordered_days:
+            if day.start_offset <= t <= day.end_offset:
+                return day
+        if t <= self.ordered_days[0].start_offset:
+            return self.ordered_days[0]
+        for i in range(len(self.ordered_days) - 1):
+            if self.ordered_days[i].end_offset < t < self.ordered_days[i + 1].start_offset:
+                return self.ordered_days[i]
+        return self.ordered_days[-1]
+
+    @property
+    def active_day(self) -> Optional[DayGroup]:
+        if not self.ordered_days:
+            return None
+        if self.player.is_playing:
+            return self.get_day_at_time(self.player.current_time)
+        val = self.hadj.get_value()
+        page = self.hadj.get_page_size()
+        center_t = self.x_to_time(val + (page / 2.0))
+        return self.get_day_at_time(center_t)
+
+    def get_session_at_time(self, t: float) -> Optional[TimelineSessionItem]:
+        if not self.session_items:
+            return None
+        for item in self.session_items:
+            if item.timeline_offset <= t <= item.end_timeline_offset:
+                return item
+        prev_items = [it for it in self.session_items if it.timeline_offset <= t]
+        if prev_items:
+            return prev_items[-1]
+        return self.session_items[0]
+
+    def jump_to_prev_day(self) -> Optional[DayGroup]:
+        curr_day = self.active_day
+        if not curr_day or not self.ordered_days:
+            return None
+        idx = self.ordered_days.index(curr_day)
+        if idx > 0:
+            target_day = self.ordered_days[idx - 1]
+            self.player.seek(target_day.start_offset)
+            return target_day
+        else:
+            self.player.seek(self.ordered_days[0].start_offset)
+            return self.ordered_days[0]
+
+    def jump_to_next_day(self) -> Optional[DayGroup]:
+        curr_day = self.active_day
+        if not curr_day or not self.ordered_days:
+            return None
+        idx = self.ordered_days.index(curr_day)
+        if idx < len(self.ordered_days) - 1:
+            target_day = self.ordered_days[idx + 1]
+            self.player.seek(target_day.start_offset)
+            return target_day
+        return None
 
     # --- Event Handlers ---
 
@@ -358,6 +490,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         GLib.idle_add(self.queue_draw)
 
     def _on_key_pressed(self, controller, keyval, keycode, state):
+        if self.autoscroll_active:
+            self._stop_autoscroll()
+            return True
+
         if keyval in (Gdk.KEY_Control_L, Gdk.KEY_Control_R):
             self.ctrl_held = True
             return False
@@ -425,9 +561,17 @@ class TimelineCanvas(Gtk.DrawingArea):
         self._drag_target_header = None
 
     def _on_motion(self, controller, x, y):
+        self.hover_mouse_x = x
+        self.hover_mouse_y = y
         world_x = x + self.hadj.get_value()
         t = self.x_to_time(world_x)
         self.hover_mouse_time = t
+
+        if self.autoscroll_active:
+            self.autoscroll_current_x = x
+            self.autoscroll_current_y = y
+            self.queue_draw()
+            return
 
         is_grabbable = False
         if self.selection_range:
@@ -460,6 +604,18 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _on_click_pressed(self, gesture, n_press, x, y):
         self.grab_focus()
+        btn = gesture.get_current_button()
+        if btn == 2:
+            if self.autoscroll_active:
+                self._stop_autoscroll()
+            else:
+                self._start_autoscroll(x, y)
+            return
+
+        if self.autoscroll_active:
+            self._stop_autoscroll()
+            return
+
         world_x = x + self.hadj.get_value()
         t = self.x_to_time(world_x)
 
@@ -549,12 +705,19 @@ class TimelineCanvas(Gtk.DrawingArea):
         self._drag_target_header = None
 
     def _on_scroll(self, controller, dx, dy):
+        if self.autoscroll_active:
+            self._stop_autoscroll()
+            return True
+
         state = controller.get_current_event_state()
         if state & Gdk.ModifierType.CONTROL_MASK:
+            pivot_x = getattr(self, "hover_mouse_x", None)
+            if pivot_x is None:
+                pivot_x = float(self.get_width() or 800.0) / 2.0
             if dy < 0:
-                self.zoom_in()
+                self.zoom_in(pivot_x=pivot_x)
             elif dy > 0:
-                self.zoom_out()
+                self.zoom_out(pivot_x=pivot_x)
             return True
         elif abs(dy) > 0 and not (state & Gdk.ModifierType.SHIFT_MASK):
             # Allow regular vertical mouse wheel to scroll horizontally across timeline
@@ -854,8 +1017,7 @@ class TimelineCanvas(Gtk.DrawingArea):
                     cr.set_source_rgba(0.75, 0.75, 0.80, 0.55)
                 else:
                     cr.set_source_rgba(0.35, 0.35, 0.40, 0.65)
-                icon = get_gm_instrument_icon(trk.program, trk.channel)
-                badge = f"{icon}  {trk.name}"
+                badge = f"{trk.name}  •  Ch {trk.channel + 1}"
                 cr.move_to(scroll_x + 14.0, l_top + 16.0)
                 cr.show_text(badge)
             cr.restore()
@@ -949,6 +1111,32 @@ class TimelineCanvas(Gtk.DrawingArea):
         # 4. Time Ruler / Footer
         self._draw_footer_ruler(cr, width, height, scroll_x)
 
+        # 5. Middle-click autoscroll anchor
+        if self.autoscroll_active:
+            ox = self.autoscroll_origin_x
+            oy = self.autoscroll_origin_y
+            cr.set_source_rgba(0.12, 0.12, 0.15, 0.85) if is_dark else cr.set_source_rgba(0.95, 0.95, 0.98, 0.90)
+            cr.arc(ox, oy, 14.0, 0, 2 * math.pi)
+            cr.fill()
+
+            cr.set_source_rgba(0.35, 0.65, 0.95, 0.9)
+            cr.set_line_width(1.5)
+            cr.arc(ox, oy, 14.0, 0, 2 * math.pi)
+            cr.stroke()
+
+            cr.arc(ox, oy, 2.5, 0, 2 * math.pi)
+            cr.fill()
+
+            cr.move_to(ox - 5.0, oy - 4.0)
+            cr.line_to(ox - 10.0, oy)
+            cr.line_to(ox - 5.0, oy + 4.0)
+            cr.stroke()
+
+            cr.move_to(ox + 5.0, oy - 4.0)
+            cr.line_to(ox + 10.0, oy)
+            cr.line_to(ox + 5.0, oy + 4.0)
+            cr.stroke()
+
     def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float, tier: int = 0):
         star_char = "★" if item.session.starred else "☆"
         cr.set_source_rgb(0.95, 0.75, 0.15) if item.session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
@@ -975,7 +1163,7 @@ class TimelineCanvas(Gtk.DrawingArea):
             badge = item.session.start_time.strftime("%-I:%M")
 
         if item.session.is_live:
-            badge = f"🔴 {badge}"
+            badge = f"[LIVE] {badge}"
 
         cr.move_to(x + 22.0, 19.0 + y_offset)
         cr.show_text(badge)

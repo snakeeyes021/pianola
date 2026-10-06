@@ -162,42 +162,6 @@ def get_gm_instrument_name(program: int, channel: int = 0) -> str:
     return GM_PROGRAM_NAMES[max(0, min(127, program))]
 
 
-def get_gm_instrument_icon(program: int, channel: int = 0) -> str:
-    """Return friendly emoji icon for instrument family."""
-    if channel == 9:
-        return "🥁"
-    p = max(0, min(127, program))
-    if p < 8:
-        return "🎹"
-    elif p < 16:
-        return "🔔"
-    elif p < 24:
-        return "⛪"
-    elif p < 32:
-        return "🎸"
-    elif p < 40:
-        return "🎸"
-    elif p < 48:
-        return "🎻"
-    elif p < 56:
-        return "👥"
-    elif p < 64:
-        return "🎺"
-    elif p < 72:
-        return "🎷"
-    elif p < 80:
-        return "🪈"
-    elif p < 88:
-        return "⚡"
-    elif p < 96:
-        return "🌊"
-    elif p < 112:
-        return "🪕"
-    elif p < 120:
-        return "🥁"
-    return "🎵"
-
-
 def get_track_color(program: int, channel: int = 0) -> Tuple[float, float, float]:
     """Curated color for instrument family in dark and light modes."""
     if channel == 9:

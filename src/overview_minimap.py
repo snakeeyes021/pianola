@@ -53,6 +53,16 @@ class OverviewMinimap(Gtk.DrawingArea):
         self.is_dragging: bool = False
         self._drag_start_hadj_val: float = 0.0
 
+    def _get_bounds(self):
+        day = getattr(self.canvas, "active_day", None)
+        if day and day.items:
+            day_start_cx = self.canvas.time_to_x(day.start_offset)
+            day_end_cx = self.canvas.time_to_x(day.end_offset)
+            day_width = max(1.0, day_end_cx - day_start_cx)
+            return day, day_start_cx, day_width
+        upper = max(1.0, self.hadj.get_upper())
+        return None, 0.0, upper
+
     @property
     def is_dark(self) -> bool:
         try:
@@ -66,23 +76,21 @@ class OverviewMinimap(Gtk.DrawingArea):
             return
         self.is_dragging = True
 
-        upper = max(1.0, self.hadj.get_upper())
+        day, day_start_cx, day_width = self._get_bounds()
         page_size = self.hadj.get_page_size()
-        scale = width / upper
+        scale = width / day_width
 
-        lens_x = self.hadj.get_value() * scale
+        lens_x = (self.hadj.get_value() - day_start_cx) * scale
         lens_w = max(16.0, page_size * scale)
 
-        # If user clicked outside the current lens, jump the lens center to the click position
+        # If user clicked outside current lens, jump lens center to click position
         if start_x < lens_x or start_x > lens_x + lens_w:
-            target_canvas_x = (start_x / width) * upper - (page_size / 2.0)
-            max_val = max(0.0, upper - page_size)
+            target_canvas_x = day_start_cx + (start_x / width) * day_width - (page_size / 2.0)
+            max_val = max(0.0, self.hadj.get_upper() - page_size)
             target_canvas_x = max(0.0, min(max_val, target_canvas_x))
             self.hadj.set_value(target_canvas_x)
             self._drag_start_hadj_val = target_canvas_x
-
         else:
-            # User clicked directly inside the lens; grab and drag smoothly from current position
             self._drag_start_hadj_val = self.hadj.get_value()
 
         self.canvas.queue_draw()
@@ -92,13 +100,12 @@ class OverviewMinimap(Gtk.DrawingArea):
         width = self.get_width()
         if width <= 0:
             return
-        upper = max(1.0, self.hadj.get_upper())
+        day, day_start_cx, day_width = self._get_bounds()
         page_size = self.hadj.get_page_size()
 
-        # 1:1 physical tracking of the lens with the mouse cursor
-        delta_canvas = (offset_x / width) * upper
+        delta_canvas = (offset_x / width) * day_width
         new_val = self._drag_start_hadj_val + delta_canvas
-        max_val = max(0.0, upper - page_size)
+        max_val = max(0.0, self.hadj.get_upper() - page_size)
         self.hadj.set_value(max(0.0, min(max_val, new_val)))
         self.canvas.queue_draw()
         self.queue_draw()
@@ -129,19 +136,20 @@ class OverviewMinimap(Gtk.DrawingArea):
             cr.set_source_rgb(0.92, 0.92, 0.94)
         cr.paint()
 
-        upper = max(1.0, self.hadj.get_upper())
-        if not self.canvas.session_items or upper <= 1.0:
+        day, day_start_cx, day_width = self._get_bounds()
+        if not self.canvas.session_items or day_width <= 1.0:
             return
 
-        scale = width / upper
+        scale = width / day_width
 
-        # 2. Draw Session Take blocks & mini notes
-        for item in self.canvas.session_items:
+        # 2. Draw Session Take blocks & mini notes for this day
+        items = day.items if (day and day.items) else self.canvas.session_items
+        for item in items:
             start_cx = self.canvas.time_to_x(item.timeline_offset)
             end_cx = self.canvas.time_to_x(item.end_timeline_offset)
 
-            sx = start_cx * scale
-            ex = end_cx * scale
+            sx = (start_cx - day_start_cx) * scale
+            ex = (end_cx - day_start_cx) * scale
             sw = max(1.5, ex - sx)
 
             # Session background block
@@ -170,8 +178,8 @@ class OverviewMinimap(Gtk.DrawingArea):
                 else:
                     cr.set_source_rgba(0.10, 0.55, 0.75, 0.70)
                 for n in notes:
-                    nx = self.canvas.time_to_x(item.timeline_offset + n.start_time) * scale
-                    n_end_x = self.canvas.time_to_x(item.timeline_offset + n.end_time) * scale
+                    nx = (self.canvas.time_to_x(item.timeline_offset + n.start_time) - day_start_cx) * scale
+                    n_end_x = (self.canvas.time_to_x(item.timeline_offset + n.end_time) - day_start_cx) * scale
                     nw = max(1.2, n_end_x - nx)
                     norm_p = max(0.0, min(1.0, (n.pitch - 36) / 52.0))
                     ny = height - 5.0 - (norm_p * (height - 10.0))
@@ -185,7 +193,7 @@ class OverviewMinimap(Gtk.DrawingArea):
                 cr.fill()
 
         # 3. Translucent Viewport Lens (active scroll view)
-        lens_x = self.hadj.get_value() * scale
+        lens_x = (self.hadj.get_value() - day_start_cx) * scale
         lens_w = max(16.0, self.hadj.get_page_size() * scale)
 
         # Lens fill
@@ -219,13 +227,25 @@ class OverviewMinimap(Gtk.DrawingArea):
 
         # 4. Playhead cursor
         play_cx = self.canvas.time_to_x(self.player.current_time)
-        play_x = play_cx * scale
+        play_x = (play_cx - day_start_cx) * scale
         if 0.0 <= play_x <= width:
             cr.set_source_rgba(0.95, 0.25, 0.25, 0.95)
             cr.set_line_width(1.5)
             cr.move_to(play_x, 0.0)
             cr.line_to(play_x, height)
             cr.stroke()
+
+        # Day title watermark
+        if day and day.date:
+            day_label = day.date.strftime("%A, %b %-d, %Y") if hasattr(day.date, "strftime") else str(day.date)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(9.0)
+            if is_dark:
+                cr.set_source_rgba(0.75, 0.75, 0.82, 0.55)
+            else:
+                cr.set_source_rgba(0.25, 0.25, 0.30, 0.55)
+            cr.move_to(8.0, 11.0)
+            cr.show_text(day_label)
 
         # 5. Outer border tray
         if is_dark:
