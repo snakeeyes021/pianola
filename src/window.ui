@@ -4,12 +4,68 @@
   <requires lib="Adw" version="1.0"/>
   <template class="PianolaWindow" parent="AdwApplicationWindow">
     <property name="title" translatable="yes">Pianola</property>
-    <property name="default-width">800</property>
-    <property name="default-height">600</property>
+    <property name="default-width">1000</property>
+    <property name="default-height">620</property>
     <property name="content">
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar">
+            <child type="start">
+              <object class="GtkButton" id="btn_open">
+                <property name="icon-name">document-open-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Open MIDI File (Ctrl+O)</property>
+                <property name="action-name">win.open</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkMenuButton" id="btn_calendar">
+                <property name="icon-name">x-office-calendar-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Jump to Date</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkSeparator">
+                <property name="orientation">vertical</property>
+                <property name="margin-start">4</property>
+                <property name="margin-end">4</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_prev_section">
+                <property name="icon-name">media-skip-backward-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Previous Section ([)</property>
+                <property name="action-name">win.prev_section</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_play">
+                <property name="icon-name">media-playback-start-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Play / Pause from Cursor (Space)</property>
+                <property name="action-name">win.play_pause</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_play_selection">
+                <property name="icon-name">media-playlist-repeat-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Play from Selection (p)</property>
+                <property name="action-name">win.play_selection</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_next_section">
+                <property name="icon-name">media-skip-forward-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Next Section (])</property>
+                <property name="action-name">win.next_section</property>
+              </object>
+            </child>
+
+            <property name="title-widget">
+              <object class="AdwWindowTitle" id="window_title">
+                <property name="title">Pianola</property>
+                <property name="subtitle" translatable="yes">MIDI Timeline</property>
+              </object>
+            </property>
+
             <child type="end">
               <object class="GtkMenuButton">
                 <property name="primary">True</property>
@@ -18,25 +74,146 @@
                 <property name="menu-model">primary_menu</property>
               </object>
             </child>
+            <child type="end">
+              <object class="GtkButton" id="btn_export">
+                <property name="icon-name">document-save-as-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Export MIDI (Ctrl+E)</property>
+                <property name="action-name">win.export</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkSeparator">
+                <property name="orientation">vertical</property>
+                <property name="margin-start">4</property>
+                <property name="margin-end">4</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="btn_zoom_in">
+                <property name="icon-name">zoom-in-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Zoom In (Ctrl+=)</property>
+                <property name="action-name">win.zoom_in</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="btn_zoom_out">
+                <property name="icon-name">zoom-out-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Zoom Out (Ctrl+-)</property>
+                <property name="action-name">win.zoom_out</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkToggleButton" id="btn_skip_silence">
+                <property name="icon-name">media-seek-forward-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Skip Silence (Toggle)</property>
+              </object>
+            </child>
           </object>
         </child>
+
         <property name="content">
-          <object class="GtkLabel" id="label">
-            <property name="label" translatable="yes">Hello, World!</property>
-            <style>
-              <class name="title-1"/>
-            </style>
+          <object class="AdwViewStack" id="view_stack">
+            <child>
+              <object class="AdwViewStackPage">
+                <property name="name">empty</property>
+                <property name="child">
+                  <object class="AdwStatusPage" id="empty_page">
+                    <property name="icon-name">audio-x-generic-symbolic</property>
+                    <property name="title" translatable="yes">No MIDI Recordings Found</property>
+                    <property name="description" translatable="yes">Midikeep archive not found. Open a .mid file or start midikeep-daemon.</property>
+                    <child>
+                      <object class="GtkButton">
+                        <property name="label" translatable="yes">Open MIDI File…</property>
+                        <property name="halign">center</property>
+                        <property name="action-name">win.open</property>
+                        <style>
+                          <class name="pill"/>
+                          <class name="suggested-action"/>
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwViewStackPage">
+                <property name="name">timeline</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <child>
+                      <object class="GtkScrolledWindow" id="scrolled_window">
+                        <property name="vexpand">True</property>
+                        <property name="hexpand">True</property>
+                        <property name="hscrollbar-policy">always</property>
+                        <property name="vscrollbar-policy">never</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="status_bar">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">12</property>
+                        <property name="margin-start">12</property>
+                        <property name="margin-end">12</property>
+                        <property name="margin-top">6</property>
+                        <property name="margin-bottom">6</property>
+                        <child>
+                          <object class="GtkLabel" id="lbl_time">
+                            <property name="label">00:00 / 00:00</property>
+                            <property name="xalign">0</property>
+                            <style>
+                              <class name="numeric"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSeparator">
+                            <property name="orientation">vertical</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="lbl_selection">
+                            <property name="label" translatable="yes">No selection</property>
+                            <property name="hexpand">True</property>
+                            <property name="xalign">0</property>
+                            <style>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">Acoustic Scrub: Hold Ctrl+Space</property>
+                            <style>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
           </object>
         </property>
       </object>
     </property>
   </template>
+
   <menu id="primary_menu">
     <section>
       <item>
-        <attribute name="label" translatable="yes">_Preferences</attribute>
-        <attribute name="action">app.preferences</attribute>
+        <attribute name="label" translatable="yes">_Open File…</attribute>
+        <attribute name="action">win.open</attribute>
       </item>
+      <item>
+        <attribute name="label" translatable="yes">_Export MIDI…</attribute>
+        <attribute name="action">win.export</attribute>
+      </item>
+    </section>
+    <section>
       <item>
         <attribute name="label" translatable="yes">_Keyboard Shortcuts</attribute>
         <attribute name="action">app.shortcuts</attribute>

@@ -2,29 +2,310 @@
 #
 # Copyright 2026 Matthew Samson
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from gi.repository import Adw
-from gi.repository import Gtk
+"""Main application window for Pianola."""
+
+import os
+import tempfile
+from datetime import datetime
+from typing import Optional, List
+
+from gi.repository import Adw, Gtk, Gio, Gdk, GLib
+
+from .archive import ArchiveManager, SessionRecord, NoteEvent
+from .player import AudioPlayer
+from .timeline_canvas import TimelineCanvas
+
 
 @Gtk.Template(resource_path='/tech/redfoxlabs/Pianola/window.ui')
 class PianolaWindow(Adw.ApplicationWindow):
     __gtype_name__ = 'PianolaWindow'
 
-    label = Gtk.Template.Child()
+    view_stack = Gtk.Template.Child()
+    scrolled_window = Gtk.Template.Child()
+    window_title = Gtk.Template.Child()
+    lbl_time = Gtk.Template.Child()
+    lbl_selection = Gtk.Template.Child()
+    btn_play = Gtk.Template.Child()
+    btn_skip_silence = Gtk.Template.Child()
+    btn_calendar = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+        self.archive_mgr = ArchiveManager()
+        self.player = AudioPlayer()
+        self.canvas = TimelineCanvas(self.player)
+
+        # Connect canvas callbacks
+        self.canvas.on_star_toggled = self._on_star_toggled
+        self.canvas.on_selection_changed = self._on_selection_changed
+
+        # Put canvas into scrolled window
+        self.scrolled_window.set_child(self.canvas)
+
+        # Player callbacks
+        self.player.on_state_changed = self._on_player_state_changed
+        self.player.on_tick = self._on_player_tick
+
+        # Setup Calendar Popover
+        self._setup_calendar_popover()
+
+        # Setup Drag and Drop
+        self._setup_drag_source()
+
+        # Connect UI toggles
+        self.btn_skip_silence.connect("toggled", self._on_skip_silence_toggled)
+
+        # Register window actions
+        self._setup_actions()
+
+        # Auto-discover Midikeep archive on launch
+        self.load_archive()
+
+    def _setup_actions(self):
+        actions = [
+            ("open", self._on_action_open),
+            ("export", self._on_action_export),
+            ("play_pause", self._on_action_play_pause),
+            ("play_selection", self._on_action_play_selection),
+            ("prev_section", self._on_action_prev_section),
+            ("next_section", self._on_action_next_section),
+            ("zoom_in", lambda *_: self.canvas.zoom_in()),
+            ("zoom_out", lambda *_: self.canvas.zoom_out()),
+        ]
+        for name, callback in actions:
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", callback)
+            self.add_action(action)
+
+    def _setup_calendar_popover(self):
+        popover = Gtk.Popover()
+        calendar = Gtk.Calendar()
+        calendar.connect("day-selected", self._on_calendar_day_selected)
+        popover.set_child(calendar)
+        self.btn_calendar.set_popover(popover)
+
+    def _setup_drag_source(self):
+        """Enable dragging marquee selection or active file directly into DAWs / Nautilus."""
+        drag_source = Gtk.DragSource.new()
+        drag_source.set_actions(Gdk.DragAction.COPY)
+        drag_source.connect("prepare", self._on_drag_prepare)
+        self.canvas.add_controller(drag_source)
+
+    def _on_drag_prepare(self, drag_source, x, y):
+        """Prepare MIDI file provider for drag operation."""
+        # If selection exists, export slice; otherwise export active session
+        sel = self.canvas.selection_range
+        temp_dir = tempfile.gettempdir()
+
+        if sel:
+            s_start, s_end = sel
+            temp_path = os.path.join(temp_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s.mid")
+            # Gather all notes overlapping selection
+            all_notes: List[NoteEvent] = []
+            for item in self.canvas.session_items:
+                for n in item.midi_data.notes:
+                    note_abs = NoteEvent(
+                        pitch=n.pitch,
+                        velocity=n.velocity,
+                        start_time=n.start_time + item.timeline_offset,
+                        end_time=n.end_time + item.timeline_offset,
+                        channel=n.channel
+                    )
+                    all_notes.append(note_abs)
+            self.archive_mgr.export_slice(all_notes, s_start, s_end, temp_path)
+            gfile = Gio.File.new_for_path(temp_path)
+            return Gdk.ContentProvider.new_for_value(gfile)
+        elif self.canvas.session_items:
+            # Drag active/nearest session file
+            t = self.canvas.x_to_time(x)
+            target_item = self.canvas.session_items[0]
+            for item in self.canvas.session_items:
+                if item.timeline_offset <= t <= item.end_timeline_offset:
+                    target_item = item
+                    break
+            if os.path.exists(target_item.session.file_path):
+                gfile = Gio.File.new_for_path(target_item.session.file_path)
+                return Gdk.ContentProvider.new_for_value(gfile)
+
+        return None
+
+    def load_archive(self):
+        """Default launch: check ~/.local/share/midikeep/index.db."""
+        if not self.archive_mgr.archive_exists():
+            self.view_stack.set_visible_child_name("empty")
+            self.window_title.set_subtitle("No Archive Found")
+            return
+
+        sessions = self.archive_mgr.load_sessions()
+        live = self.archive_mgr.get_live_session()
+        if live:
+            sessions.append(live)
+
+        if not sessions:
+            self.view_stack.set_visible_child_name("empty")
+            self.window_title.set_subtitle("Empty Archive")
+            return
+
+        self.view_stack.set_visible_child_name("timeline")
+        self.canvas.load_sessions(sessions)
+
+        # Default start position: beginning of the last session
+        self.canvas.jump_to_latest_session()
+
+        count = len(sessions)
+        self.window_title.set_subtitle(f"Midikeep Archive • {count} {'take' if count == 1 else 'takes'}")
+
+    def load_file(self, filepath: str):
+        """Open an external single MIDI file directly."""
+        try:
+            session = self.archive_mgr.load_single_file(filepath)
+            self.view_stack.set_visible_child_name("timeline")
+            self.canvas.load_sessions([session])
+            self.canvas.jump_to_archive_start()
+            self.window_title.set_subtitle(os.path.basename(filepath))
+        except Exception as e:
+            dialog = Adw.AlertDialog(
+                heading="Could Not Open File",
+                body=str(e)
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present(self)
+
+    # --- Callbacks & Action Handlers ---
+
+    def _on_star_toggled(self, session: SessionRecord, new_state: bool):
+        if session.id is not None:
+            self.archive_mgr.set_starred(session.id, new_state)
+
+    def _on_selection_changed(self, sel_range: Optional[tuple]):
+        if sel_range:
+            s1, s2 = sel_range
+            dur = s2 - s1
+            m1, s_1 = int(s1 // 60), int(s1 % 60)
+            m2, s_2 = int(s2 // 60), int(s2 % 60)
+            self.lbl_selection.set_text(f"Selected: {m1:02d}:{s_1:02d} – {m2:02d}:{s_2:02d} ({dur:.1f}s)")
+        else:
+            self.lbl_selection.set_text("No selection")
+
+    def _on_skip_silence_toggled(self, button):
+        self.player.skip_silence = button.get_active()
+
+    def _on_player_state_changed(self, is_playing: bool):
+        GLib.idle_add(lambda: self.btn_play.set_icon_name(
+            "media-playback-pause-symbolic" if is_playing else "media-playback-start-symbolic"
+        ))
+
+    def _on_player_tick(self, current_time: float):
+        def _update():
+            # Update time label
+            cur_m, cur_s = int(current_time // 60), int(current_time % 60)
+            tot = self.canvas.total_timeline_duration
+            tot_m, tot_s = int(tot // 60), int(tot % 60)
+            self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
+
+            # Auto-scroll scrolled_window if playhead is past visible bounds
+            if self.player.is_playing:
+                hadj = self.scrolled_window.get_hadjustment()
+                cur_x = self.canvas.time_to_x(current_time)
+                page_size = hadj.get_page_size()
+                val = hadj.get_value()
+                if cur_x > val + page_size - 100:
+                    hadj.set_value(cur_x - 100)
+                elif cur_x < val:
+                    hadj.set_value(max(0, cur_x - 50))
+            return False
+
+        GLib.idle_add(_update)
+
+    def _on_calendar_day_selected(self, calendar):
+        gdate = calendar.get_date()
+        target = datetime(gdate.get_year(), gdate.get_month(), gdate.get_day_of_month())
+        self.canvas.jump_to_day(target)
+        popover = self.btn_calendar.get_popover()
+        if popover:
+            popover.popdown()
+
+    def _on_action_play_pause(self, action, param):
+        self.player.toggle_play_pause()
+
+    def _on_action_play_selection(self, action, param):
+        if self.canvas.selection_range:
+            start_t = self.canvas.selection_range[0]
+            self.player.play(from_time=start_t)
+        else:
+            self.player.play()
+
+    def _on_action_prev_section(self, action, param):
+        self.player.jump_prev_section()
+
+    def _on_action_next_section(self, action, param):
+        self.player.jump_next_section()
+
+    def _on_action_open(self, action, param):
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Open MIDI File")
+        filter_midi = Gtk.FileFilter()
+        filter_midi.set_name("MIDI Files (*.mid, *.midi)")
+        filter_midi.add_pattern("*.mid")
+        filter_midi.add_pattern("*.midi")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(filter_midi)
+        dialog.set_filters(filters)
+
+        def _open_cb(src, res):
+            try:
+                gfile = dialog.open_finish(res)
+                if gfile:
+                    self.load_file(gfile.get_path())
+            except Exception:
+                pass
+
+        dialog.open(self, None, _open_cb)
+
+    def _on_action_export(self, action, param):
+        """Export selection (marquee slice), current file, or multiple files."""
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Export MIDI")
+
+        sel = self.canvas.selection_range
+        if sel:
+            dialog.set_initial_name("selection_slice.mid")
+        elif self.canvas.session_items:
+            dialog.set_initial_name(os.path.basename(self.canvas.session_items[0].session.file_path))
+
+        def _save_cb(src, res):
+            try:
+                gfile = dialog.save_finish(res)
+                if not gfile:
+                    return
+                dest_path = gfile.get_path()
+
+                if sel:
+                    s_start, s_end = sel
+                    all_notes: List[NoteEvent] = []
+                    for item in self.canvas.session_items:
+                        for n in item.midi_data.notes:
+                            all_notes.append(NoteEvent(
+                                pitch=n.pitch,
+                                velocity=n.velocity,
+                                start_time=n.start_time + item.timeline_offset,
+                                end_time=n.end_time + item.timeline_offset,
+                                channel=n.channel
+                            ))
+                    self.archive_mgr.export_slice(all_notes, s_start, s_end, dest_path)
+                elif self.canvas.session_items:
+                    src_file = self.canvas.session_items[0].session.file_path
+                    self.archive_mgr.export_file(src_file, dest_path)
+            except Exception as e:
+                err_dlg = Adw.AlertDialog(heading="Export Failed", body=str(e))
+                err_dlg.add_response("ok", "OK")
+                err_dlg.present(self)
+
+        dialog.save(self, None, _save_cb)
+
+    def do_close_request(self):
+        self.player.close()
+        return super().do_close_request()

@@ -32,6 +32,7 @@ pianola_sources = [
   'window.py',
   'archive.py',
   'player.py',
+  'timeline_canvas.py',
 ]
 
 install_data(pianola_sources, install_dir: moduledir)
