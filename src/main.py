@@ -6,7 +6,13 @@
 
 """Application entry point and lifecycle manager for Pianola."""
 
+import os
 import sys
+
+# Default to Cairo renderer to avoid GTK 4.14+ GSK GPU upload assertion crashes in sandboxed/Flatpak environments
+if "GSK_RENDERER" not in os.environ:
+    os.environ["GSK_RENDERER"] = "cairo"
+
 import gi
 
 from gettext import gettext as _

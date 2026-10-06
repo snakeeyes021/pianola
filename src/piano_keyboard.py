@@ -29,9 +29,15 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
         self.player = player
 
         self.set_content_width(self.KEYBOARD_WIDTH)
+        self.set_content_height(320)
         self.set_hexpand(False)
         self.set_vexpand(True)
         self.set_draw_func(self._on_draw)
+
+    def do_snapshot(self, snapshot):
+        if self.get_width() <= 0 or self.get_height() <= 0:
+            return
+        super().do_snapshot(snapshot)
 
     def _get_active_pitches(self) -> Set[int]:
         active = set()
@@ -54,6 +60,8 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
         return active
 
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
+        if width <= 0 or height <= 0:
+            return
         # 1. Background gutter
         cr.set_source_rgb(0.11, 0.11, 0.12)
         cr.paint()

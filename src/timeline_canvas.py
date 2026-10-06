@@ -93,7 +93,11 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.set_draw_func(self._on_draw)
 
         self._setup_event_controllers()
-        self.player.on_tick = self._on_player_tick
+
+    def do_snapshot(self, snapshot):
+        if self.get_width() <= 0 or self.get_height() <= 0:
+            return
+        super().do_snapshot(snapshot)
 
     def _setup_event_controllers(self):
         # Motion controller
@@ -509,6 +513,8 @@ class TimelineCanvas(Gtk.DrawingArea):
                 cr.show_text(octave_name)
 
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
+        if width <= 0 or height <= 0:
+            return
         cr.set_source_rgb(0.12, 0.12, 0.13)
         cr.paint()
 

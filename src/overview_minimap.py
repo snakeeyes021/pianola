@@ -26,10 +26,16 @@ class OverviewMinimap(Gtk.DrawingArea):
         self.scrolled_window = scrolled_window
         self.player = player
 
+        self.set_content_width(400)
         self.set_content_height(30)
         self.set_hexpand(True)
         self.set_vexpand(False)
         self.set_draw_func(self._on_draw)
+
+    def do_snapshot(self, snapshot):
+        if self.get_width() <= 0 or self.get_height() <= 0:
+            return
+        super().do_snapshot(snapshot)
 
         # Connect adjustments
         hadj = self.scrolled_window.get_hadjustment()
@@ -100,6 +106,8 @@ class OverviewMinimap(Gtk.DrawingArea):
         return True
 
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
+        if width <= 0 or height <= 0:
+            return
         # 1. Background tray
         cr.set_source_rgb(0.09, 0.09, 0.10)
         cr.paint()
