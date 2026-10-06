@@ -13,10 +13,12 @@
         "--socket=pulseaudio",
         "--filesystem=xdg-data/midikeep:create",
         "--filesystem=xdg-cache/pianola:create",
+        "--filesystem=xdg-data/soundfonts:ro",
         "--filesystem=home:ro"
     ],
     "cleanup": [
         "/include",
+        "/lib/cmake",
         "/lib/pkgconfig",
         "/man",
         "/share/doc",
@@ -28,13 +30,49 @@
     ],
     "modules": [
         {
+            "name": "fluidsynth",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DBUILD_SHARED_LIBS=ON",
+                "-Denable-pulseaudio=ON",
+                "-Denable-alsa=ON",
+                "-Denable-jack=OFF",
+                "-Denable-pipewire=OFF",
+                "-Denable-readline=OFF",
+                "-Denable-dbus=OFF"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/FluidSynth/fluidsynth/archive/v2.4.1.tar.gz",
+                    "sha256": "d1e64155ac9048a1c97a2245b63b2164478148b556f0e4fc41fbf16d7a468d6f"
+                }
+            ]
+        },
+        {
+            "name": "soundfont-fluid-gm",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm644 FluidR3_GM.sf2 /app/share/soundfonts/FluidR3_GM.sf2",
+                "ln -sf FluidR3_GM.sf2 /app/share/soundfonts/default.sf2"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "http://deb.debian.org/debian/pool/main/f/fluid-soundfont/fluid-soundfont_3.1.orig.tar.gz",
+                    "sha256": "2621acaa1c78e4abdb24bdd163230cc577e61276936d6aa6e3180582142f0343"
+                }
+            ]
+        },
+        {
             "name": "pianola",
             "builddir": true,
             "buildsystem": "meson",
             "sources": [
                 {
-                    "type": "git",
-                    "url": "file:///home/matt/dev"
+                    "type": "dir",
+                    "path": "."
                 }
             ]
         }

@@ -31,6 +31,9 @@ from .archive import NoteEvent, Section, MidiData
 DEFAULT_SOUNDFONT_PATHS = [
     "/app/share/soundfonts/default.sf2",
     "/app/share/soundfonts/FluidR3_GM.sf2",
+    os.path.expanduser("~/.local/share/soundfonts/default.sf2"),
+    os.path.expanduser("~/.local/share/soundfonts/FluidR3_GM.sf2"),
+    os.path.expanduser("~/.local/share/midikeep/soundfonts/default.sf2"),
     "/usr/share/soundfonts/default.sf2",
     "/usr/share/soundfonts/FluidR3_GM.sf2",
     "/usr/share/sounds/sf2/default.sf2",
@@ -68,22 +71,28 @@ class FluidSynthEngine(BaseSynth):
         self._init_fluid(soundfont_path)
 
     def _init_fluid(self, soundfont_path: Optional[str]):
-        # Search for libfluidsynth
-        try:
-            libname = ctypes.util.find_library("fluidsynth") or "libfluidsynth.so.3"
-        except Exception:
-            libname = "libfluidsynth.so.3"
-        try:
-            self._lib = ctypes.CDLL(libname)
-        except OSError:
+        # Search for libfluidsynth across standard system and Flatpak /app/lib paths
+        candidates = [
+            "/app/lib/libfluidsynth.so.3",
+            "/app/lib/libfluidsynth.so",
+            ctypes.util.find_library("fluidsynth") if hasattr(ctypes.util, "find_library") else None,
+            "libfluidsynth.so.3",
+            "libfluidsynth.so.2",
+            "libfluidsynth.so",
+        ]
+        self._lib = None
+        for c in candidates:
+            if not c:
+                continue
             try:
-                self._lib = ctypes.CDLL("libfluidsynth.so.2")
+                self._lib = ctypes.CDLL(c)
+                if self._lib:
+                    break
             except OSError:
-                try:
-                    self._lib = ctypes.CDLL("libfluidsynth.so")
-                except OSError:
-                    self._lib = None
-                    return
+                continue
+
+        if not self._lib:
+            return
 
         # Setup ctypes signatures
         self._lib.new_fluid_settings.restype = ctypes.c_void_p
