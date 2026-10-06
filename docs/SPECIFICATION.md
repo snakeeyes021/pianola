@@ -64,6 +64,10 @@ Pianola (`tech.redfoxlabs.Pianola`) is a modern, lightweight, HIG-compliant GNOM
 
 ## 4. Known Issues & Platform Integration Notes
 
-### 4.1 Flatpak Drag-and-Drop to Host / Wine Applications
-* **Issue:** When running inside the Flatpak sandbox, temporary export slices written to `/tmp/` reside in Flatpak private mount namespace, rendering them inaccessible to host file managers or Wine-bridged applications (e.g. Dorico).
-* **Fix Target:** Write drag-and-drop cache slices to `~/.local/share/midikeep/exports/` or implement the `org.freedesktop.portal.FileTransfer` portal to negotiate cross-sandbox file transfers.
+### 4.1 External Drag-and-Drop Interoperability (File Explorer, Wine/Dorico)
+* **Status:** Logged known issue for future investigation / enhancement.
+* **Observed Behavior:** Dragging out from Pianola (via `text/uri-list`) does not currently drop into certain external applications, including the system File Explorer (Nautilus) and Dorico (running through Wine).
+* **Root Causes / Architecture Analysis:**
+  1. **Sandbox Namespace Isolation:** When running inside Flatpak, temporary export slices written to `/tmp/pianola_export.mid` reside inside Flatpak's private mount namespace (`/tmp`), which is inaccessible to host applications outside the sandbox.
+  2. **Host Accessibility:** Writing cache files to a host-accessible path (e.g. `~/.local/share/midikeep/exports/`) or using XDG Desktop Portal `org.freedesktop.portal.FileTransfer` is required for host applications to read the URI.
+  3. **Wine / Windows Bridge:** Wine applications running on Wayland/X11 have special OLE/DND clipboard and virtual drive path translation requirements (e.g. `Z:\path\to\file`).

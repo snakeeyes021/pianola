@@ -18,7 +18,7 @@ import io
 import struct
 import sqlite3
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -487,12 +487,16 @@ class ArchiveManager:
                     st = datetime.fromisoformat(st_str)
                     if st.tzinfo is not None:
                         st = st.astimezone()  # Convert from UTC to local system time
+                    else:
+                        st = st.replace(tzinfo=timezone.utc).astimezone()
                 except Exception:
                     st = datetime.now()
                 try:
                     et = datetime.fromisoformat(et_str)
                     if et.tzinfo is not None:
                         et = et.astimezone()
+                    else:
+                        et = et.replace(tzinfo=timezone.utc).astimezone()
                 except Exception:
                     et = st
 
