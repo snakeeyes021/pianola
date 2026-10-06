@@ -260,7 +260,9 @@ class TimelineCanvas(Gtk.DrawingArea):
     def _on_drag_update(self, gesture, offset_x, offset_y):
         if self._drag_start_time is None:
             return
-        start_x, _ = gesture.get_start_point()
+        success, start_x, _ = gesture.get_start_point()
+        if not success:
+            return
         curr_x = start_x + offset_x
         curr_t = self.x_to_time(curr_x)
 

@@ -183,6 +183,106 @@ class NullSynthEngine(BaseSynth):
         self.active_sounding_notes.clear()
 
 
+class PulseWaveSynth(BaseSynth):
+    """Real-time wave synthesizer streaming to PulseAudio / PipeWire via paplay/pw-play.
+    Provides immediate audio feedback even when FluidSynth is not installed."""
+
+    def __init__(self):
+        import subprocess, math, struct
+        self.math = math
+        self.struct = struct
+        self.subprocess = subprocess
+        self.rate = 44100
+        self.active_notes = {}
+        self.lock = threading.Lock()
+        self.running = True
+        self.proc = None
+        self.is_available = False
+        self._start_proc()
+        if self.proc:
+            self.is_available = True
+            self.thread = threading.Thread(target=self._audio_loop, daemon=True)
+            self.thread.start()
+
+    def _start_proc(self):
+        # Try paplay then pw-play
+        for cmd in [
+            ['paplay', '--raw', '--format=s16le', f'--rate={self.rate}', '--channels=1'],
+            ['pw-play', '--format=s16', f'--rate={self.rate}', '--channels=1', '-']
+        ]:
+            try:
+                self.proc = self.subprocess.Popen(
+                    cmd, stdin=self.subprocess.PIPE, stderr=self.subprocess.DEVNULL
+                )
+                return
+            except Exception:
+                self.proc = None
+
+    def note_on(self, channel: int, pitch: int, velocity: int):
+        with self.lock:
+            freq = 440.0 * (2.0 ** ((pitch - 69) / 12.0))
+            self.active_notes[(channel, pitch)] = {
+                'freq': freq, 'vel': velocity, 'phase': 0.0, 'age': 0.0
+            }
+
+    def note_off(self, channel: int, pitch: int):
+        with self.lock:
+            self.active_notes.pop((channel, pitch), None)
+
+    def all_notes_off(self):
+        with self.lock:
+            self.active_notes.clear()
+
+    def _audio_loop(self):
+        chunk_size = int(self.rate * 0.02)  # 20ms buffer
+        dt = 1.0 / self.rate
+        while self.running:
+            if not self.proc or self.proc.poll() is not None:
+                self._start_proc()
+                if not self.proc:
+                    time.sleep(0.05)
+                    continue
+
+            with self.lock:
+                if not self.active_notes:
+                    time.sleep(0.015)
+                    continue
+                notes_snapshot = list(self.active_notes.values())
+
+            samples = []
+            for _ in range(chunk_size):
+                sample_val = 0.0
+                for n in notes_snapshot:
+                    f = n['freq']
+                    p = n['phase']
+                    decay = self.math.exp(-2.2 * n['age'])
+                    v = n['vel'] / 127.0
+                    val = (self.math.sin(p) + 0.3 * self.math.sin(2.0 * p) + 0.15 * self.math.sin(3.0 * p)) * decay * v
+                    sample_val += val
+                    n['phase'] = (p + 2.0 * self.math.pi * f * dt) % (2.0 * self.math.pi)
+                    n['age'] += dt
+
+                scaled = int(max(-32767.0, min(32767.0, sample_val * 14000.0)))
+                samples.append(self.struct.pack('<h', scaled))
+
+            data = b''.join(samples)
+            try:
+                self.proc.stdin.write(data)
+                self.proc.stdin.flush()
+            except Exception:
+                self._start_proc()
+
+    def close(self):
+        self.running = False
+        self.all_notes_off()
+        if self.proc:
+            try:
+                self.proc.stdin.close()
+                self.proc.terminate()
+            except Exception:
+                pass
+
+
 class AudioPlayer:
     """Manages audio auditioning, acoustic scrubbing, playback, and navigation."""
 
@@ -191,7 +291,11 @@ class AudioPlayer:
             self.synth = synth
         else:
             fluid = FluidSynthEngine()
-            self.synth = fluid if fluid.is_ready else NullSynthEngine()
+            if fluid.is_ready:
+                self.synth = fluid
+            else:
+                pulse = PulseWaveSynth()
+                self.synth = pulse if pulse.is_available else NullSynthEngine()
 
         self.notes: List[NoteEvent] = []
         self.sections: List[Section] = []

@@ -30,6 +30,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     btn_play = Gtk.Template.Child()
     btn_skip_silence = Gtk.Template.Child()
     btn_loop = Gtk.Template.Child()
+    btn_drag_daw = Gtk.Template.Child()
     btn_calendar = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
@@ -94,7 +95,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         drag_source = Gtk.DragSource.new()
         drag_source.set_actions(Gdk.DragAction.COPY)
         drag_source.connect("prepare", self._on_drag_prepare)
-        self.canvas.add_controller(drag_source)
+        self.btn_drag_daw.add_controller(drag_source)
 
     def _on_drag_prepare(self, drag_source, x, y):
         """Prepare MIDI file provider for drag operation."""
@@ -212,6 +213,9 @@ class PianolaWindow(Adw.ApplicationWindow):
             tot_m, tot_s = int(tot // 60), int(tot % 60)
             self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
+            # Redraw canvas so playhead cursor follows playback in real time
+            self.canvas.queue_draw()
+
             # Auto-scroll scrolled_window if playhead is past visible bounds
             if self.player.is_playing:
                 hadj = self.scrolled_window.get_hadjustment()
@@ -314,4 +318,4 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def do_close_request(self):
         self.player.close()
-        return super().do_close_request()
+        return False
