@@ -46,10 +46,6 @@ jobs:
       image: bilelmoussaoui/flatpak-github-actions:gnome-nightly
       options: --privileged
 
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -70,14 +66,52 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish OCI Image to GHCR
+      - name: Export OCI Image
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         run: |
           echo "Exporting Flatpak OCI image..."
           flatpak build-bundle --oci repo tech.redfoxlabs.Pianola.oci tech.redfoxlabs.Pianola
+
+      - name: Upload OCI Image Artifact
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: tech.redfoxlabs.Pianola.oci
+          path: tech.redfoxlabs.Pianola.oci
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-oci:
+    name: Publish OCI Image to GHCR
+    needs: flatpak-builder
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download OCI Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tech.redfoxlabs.Pianola.oci
+          path: tech.redfoxlabs.Pianola.oci
+
+      - name: Install Skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Publish to GitHub Container Registry
+        run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login -u "${{ github.actor }}" --password-stdin ghcr.io
           IMAGE_TAG="latest"
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             IMAGE_TAG="${GITHUB_REF#refs/tags/v}"
           fi
-          skopeo copy oci:tech.redfoxlabs.Pianola.oci "docker://ghcr.io/${{ github.repository_owner }}/pianola:${IMAGE_TAG}" || echo "Skipping skopeo push if registry not configured"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "Publishing OCI image tag: ${IMAGE_TAG}"
+          skopeo copy oci:tech.redfoxlabs.Pianola.oci "docker://ghcr.io/${OWNER}/pianola:${IMAGE_TAG}"
+          if [[ "${IMAGE_TAG}" != "latest" ]]; then
+            skopeo copy oci:tech.redfoxlabs.Pianola.oci "docker://ghcr.io/${OWNER}/pianola:latest" || true
+          fi
