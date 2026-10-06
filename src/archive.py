@@ -485,10 +485,14 @@ class ArchiveManager:
                 et_str = row["end_time"]
                 try:
                     st = datetime.fromisoformat(st_str)
+                    if st.tzinfo is not None:
+                        st = st.astimezone()  # Convert from UTC to local system time
                 except Exception:
                     st = datetime.now()
                 try:
                     et = datetime.fromisoformat(et_str)
+                    if et.tzinfo is not None:
+                        et = et.astimezone()
                 except Exception:
                     et = st
 

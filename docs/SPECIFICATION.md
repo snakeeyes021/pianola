@@ -59,3 +59,11 @@ Pianola (`tech.redfoxlabs.Pianola`) is a modern, lightweight, HIG-compliant GNOM
 * **PipeWire / PulseAudio:** Native portal support (`--socket=pulseaudio`).
 * **Silence Skipping:** Automatically fast-forwards through silence gaps when "Skip Silence" is enabled.
 
+
+---
+
+## 4. Known Issues & Platform Integration Notes
+
+### 4.1 Flatpak Drag-and-Drop to Host / Wine Applications
+* **Issue:** When running inside the Flatpak sandbox, temporary export slices written to `/tmp/` reside in Flatpak private mount namespace, rendering them inaccessible to host file managers or Wine-bridged applications (e.g. Dorico).
+* **Fix Target:** Write drag-and-drop cache slices to `~/.local/share/midikeep/exports/` or implement the `org.freedesktop.portal.FileTransfer` portal to negotiate cross-sandbox file transfers.

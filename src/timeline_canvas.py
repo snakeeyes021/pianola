@@ -437,6 +437,67 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     # --- Cairo Drawing ---
 
+    def _get_global_pitch_bounds(self) -> Tuple[int, int, int]:
+        all_notes = [n for item in self.session_items for n in item.midi_data.notes]
+        if all_notes:
+            min_p = min(min(n.pitch for n in all_notes) - 2, 57)
+            max_p = max(max(n.pitch for n in all_notes) + 2, 63)
+        else:
+            min_p = 48
+            max_p = 72
+        pitch_range = max(12, max_p - min_p + 1)
+        return min_p, max_p, pitch_range
+
+    def _draw_pitch_grid(self, cr: cairo.Context, width: int, roll_top: float, roll_bottom: float, roll_h: float):
+        min_p, max_p, pitch_range = self._get_global_pitch_bounds()
+        lane_h = (roll_h - 10.0) / pitch_range
+
+        for p in range(min_p, max_p + 1):
+            norm_p = (p - min_p) / pitch_range
+            y = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
+
+            is_black = (p % 12) in (1, 3, 6, 8, 10)
+            if is_black:
+                cr.set_source_rgba(0.08, 0.08, 0.09, 0.6)
+                cr.rectangle(0, y - (lane_h / 2.0), width, lane_h)
+                cr.fill()
+
+            if p == 60:
+                # Middle C (C4 = 60) highlight guide line
+                cr.set_source_rgba(0.25, 0.65, 0.95, 0.5)
+                cr.set_line_width(1.2)
+                cr.set_dash([4.0, 4.0])
+                cr.move_to(0, y)
+                cr.line_to(width, y)
+                cr.stroke()
+                cr.set_dash([])
+
+                # Badge label
+                cr.set_source_rgba(0.15, 0.45, 0.75, 0.85)
+                cr.rectangle(4.0, y - 7.0, 84.0, 14.0)
+                cr.fill()
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+                cr.set_font_size(9.0)
+                cr.move_to(8.0, y + 3.0)
+                cr.show_text("Middle C (C4)")
+            elif p % 12 == 0:
+                # Other C octaves
+                cr.set_source_rgba(0.4, 0.4, 0.45, 0.25)
+                cr.set_line_width(0.8)
+                cr.set_dash([2.0, 4.0])
+                cr.move_to(0, y)
+                cr.line_to(width, y)
+                cr.stroke()
+                cr.set_dash([])
+
+                octave_name = f"C{(p // 12) - 1}"
+                cr.set_source_rgba(0.6, 0.6, 0.65, 0.7)
+                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+                cr.set_font_size(8.5)
+                cr.move_to(6.0, y + 3.0)
+                cr.show_text(octave_name)
+
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
         cr.set_source_rgb(0.12, 0.12, 0.13)
         cr.paint()
@@ -444,6 +505,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         roll_top = self.HEADER_HEIGHT
         roll_bottom = height - self.FOOTER_HEIGHT
         roll_h = max(10.0, roll_bottom - roll_top)
+
+        # Draw Pitch Grid lanes and Middle C (C4) guide line
+        self._draw_pitch_grid(cr, width, roll_top, roll_bottom, roll_h)
+        min_p, _, pitch_range = self._get_global_pitch_bounds()
 
         # 1. Draw sessions and notes
         for item in self.session_items:
@@ -472,9 +537,6 @@ class TimelineCanvas(Gtk.DrawingArea):
             # Draw Notes & Pedal Tails
             notes = item.midi_data.notes
             if notes:
-                min_p = min(n.pitch for n in notes)
-                max_p = max(n.pitch for n in notes)
-                pitch_range = max(12, max_p - min_p + 1)
 
                 for n in notes:
                     nx = self.time_to_x(item.timeline_offset + n.start_time)
@@ -604,7 +666,7 @@ class TimelineCanvas(Gtk.DrawingArea):
 
         cr.set_source_rgb(0.85, 0.85, 0.88)
         cr.set_font_size(11.0)
-        date_str = item.session.start_time.strftime("%b %d, %H:%M")
+        date_str = item.session.start_time.strftime("%b %-d, %-I:%M %p")
         badge = f"{date_str} • {item.session.device_name}"
         if item.session.is_live:
             badge = f"🔴 LIVE • {badge}"
