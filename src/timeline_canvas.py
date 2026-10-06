@@ -7,9 +7,10 @@
 """Continuous horizontal timeline canvas for Pianola.
 
 Renders:
-- Multi-session continuous piano roll / note density across file boundaries.
-- Session headers, clapper markers (0xFF 0x06), and >= 3.0s silence section boundaries.
-- Interactive playhead cursor and acoustic scrubbing hover sustain (Ctrl+Space).
+- Multi-session continuous piano roll with Silence Compacting (gaps >= 3s collapsed to 2s).
+- Distinct visualization of finger-held note durations vs damper pedal (CC 64) sustain tails.
+- Session headers, clapper markers (0xFF 0x06), and collapsed pause indicators (// [pause]).
+- Dorico-style acoustic scrubbing: Hold Ctrl + Space and glide mouse over notes.
 - Marquee time range selection with Shift/Ctrl modifiers.
 - Smooth horizontal zoom and native scrolling.
 """
@@ -18,10 +19,23 @@ import math
 from datetime import datetime
 from typing import List, Optional, Tuple, Callable
 import cairo
-from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
+from gi.repository import Gtk, Gdk, GLib
 
 from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData
 from .player import AudioPlayer
+
+
+class CollapsedGap:
+    """Represents a silence gap >= 3s visually collapsed to a compact 2s fold."""
+
+    def __init__(self, real_start: float, real_end: float, visual_duration: float = 2.0):
+        self.real_start = real_start
+        self.real_end = real_end
+        self.real_duration = max(0.001, real_end - real_start)
+        self.visual_duration = min(self.real_duration, visual_duration)
+        self.saved = self.real_duration - self.visual_duration
+        self.vis_start: float = 0.0
+        self.vis_end: float = 0.0
 
 
 class TimelineSessionItem:
@@ -29,7 +43,7 @@ class TimelineSessionItem:
 
     def __init__(self, session: SessionRecord, timeline_offset: float):
         self.session = session
-        self.timeline_offset = timeline_offset  # Start seconds on the continuous timeline
+        self.timeline_offset = timeline_offset
         self.midi_data: MidiData = session.get_midi_data()
         self.duration: float = max(self.session.duration_seconds, self.midi_data.duration, 0.5)
 
@@ -52,21 +66,23 @@ class TimelineCanvas(Gtk.DrawingArea):
         super().__init__()
         self.player = player
         self.session_items: List[TimelineSessionItem] = []
+        self.collapsed_gaps: List[CollapsedGap] = []
         self.total_timeline_duration: float = 0.0
+        self.total_visual_duration: float = 0.0
         self.px_per_sec: float = self.DEFAULT_PX_PER_SEC
 
-        # Selection state: (start_sec, end_sec) on continuous timeline or None
+        # Selection state: (start_sec, end_sec) on real timeline
         self.selection_range: Optional[Tuple[float, float]] = None
         self._drag_start_time: Optional[float] = None
 
-        # Acoustic scrub state (Dorico style: Ctrl+Space held)
+        # Dorico scrub state: Hold Ctrl + Space while moving mouse
         self.ctrl_held: bool = False
         self.space_held: bool = False
         self.hover_mouse_time: float = 0.0
         self.scrub_active: bool = False
         self.scrub_cursor_time: Optional[float] = None
 
-        # Star toggle callback: on_star_toggled(session_record, new_state)
+        # Callbacks
         self.on_star_toggled: Optional[Callable[[SessionRecord, bool], None]] = None
         self.on_selection_changed: Optional[Callable[[Optional[Tuple[float, float]]], None]] = None
 
@@ -76,14 +92,11 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.set_focusable(True)
         self.set_draw_func(self._on_draw)
 
-        # Event controllers
         self._setup_event_controllers()
-
-        # Connect player callbacks
         self.player.on_tick = self._on_player_tick
 
     def _setup_event_controllers(self):
-        # Motion controller for acoustic scrub hover
+        # Motion controller
         motion = Gtk.EventControllerMotion.new()
         motion.connect("motion", self._on_motion)
         motion.connect("leave", self._on_motion_leave)
@@ -96,12 +109,12 @@ class TimelineCanvas(Gtk.DrawingArea):
         drag.connect("drag-end", self._on_drag_end)
         self.add_controller(drag)
 
-        # Click gesture for cursor positioning / markers
+        # Click gesture for cursor positioning / markers / stars
         click = Gtk.GestureClick.new()
         click.connect("pressed", self._on_click_pressed)
         self.add_controller(click)
 
-        # Key controller for Ctrl+Space scrubbing and modifier tracking
+        # Key controller for Dorico Ctrl+Space scrubbing
         keys = Gtk.EventControllerKey.new()
         keys.connect("key-pressed", self._on_key_pressed)
         keys.connect("key-released", self._on_key_released)
@@ -113,7 +126,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.add_controller(scroll)
 
     def load_sessions(self, sessions: List[SessionRecord]):
-        """Build continuous timeline spanning all sessions."""
+        """Build continuous timeline with Silence Compacting spanning all sessions."""
         self.session_items.clear()
         curr_offset = 0.0
 
@@ -124,17 +137,17 @@ class TimelineCanvas(Gtk.DrawingArea):
             item = TimelineSessionItem(s, curr_offset)
             self.session_items.append(item)
 
-            # Map notes into unified continuous timeline coordinates
             for n in item.midi_data.notes:
+                key_end = (n.played_end_time + curr_offset) if n.key_end_time is not None else None
                 all_notes.append(NoteEvent(
                     pitch=n.pitch,
                     velocity=n.velocity,
                     start_time=n.start_time + curr_offset,
                     end_time=n.end_time + curr_offset,
-                    channel=n.channel
+                    channel=n.channel,
+                    key_end_time=key_end
                 ))
 
-            # Map sections into unified timeline
             for sec in item.midi_data.sections:
                 all_sections.append(Section(
                     start_time=sec.start_time + curr_offset,
@@ -145,7 +158,9 @@ class TimelineCanvas(Gtk.DrawingArea):
 
         self.total_timeline_duration = max(0.5, curr_offset - self.INTER_SESSION_GAP if self.session_items else 0.0)
 
-        # Feed unified timeline notes and sections to audio player
+        # Build Collapsed Gaps for all pauses >= 3.0 seconds
+        self._build_collapsed_gaps(all_sections)
+
         unified_midi = MidiData(
             duration=self.total_timeline_duration,
             notes=all_notes,
@@ -156,13 +171,90 @@ class TimelineCanvas(Gtk.DrawingArea):
         self._update_dimensions()
         self.queue_draw()
 
+    def _build_collapsed_gaps(self, sections: List[Section]):
+        """Identify all silences >= 3.0s and configure them as compact 2s visual folds."""
+        self.collapsed_gaps.clear()
+        if not sections:
+            return
+
+        sorted_secs = sorted(sections, key=lambda s: s.start_time)
+        raw_gaps = []
+
+        # Leading silence
+        if sorted_secs[0].start_time >= 3.0:
+            raw_gaps.append((0.0, sorted_secs[0].start_time))
+
+        # Gaps between sections
+        for i in range(len(sorted_secs) - 1):
+            s_end = sorted_secs[i].end_time
+            next_start = sorted_secs[i+1].start_time
+            if next_start - s_end >= 3.0:
+                raw_gaps.append((s_end, next_start))
+
+        # Trailing silence
+        if self.total_timeline_duration - sorted_secs[-1].end_time >= 3.0:
+            raw_gaps.append((sorted_secs[-1].end_time, self.total_timeline_duration))
+
+        # Build collapsed gaps with running offsets
+        cum_saved = 0.0
+        for g_start, g_end in raw_gaps:
+            gap = CollapsedGap(g_start, g_end, visual_duration=2.0)
+            gap.vis_start = g_start - cum_saved
+            gap.vis_end = gap.vis_start + gap.visual_duration
+            cum_saved += gap.saved
+            self.collapsed_gaps.append(gap)
+
+        self.total_visual_duration = self.time_to_visual(self.total_timeline_duration)
+
+    # --- Silence Compacting Coordinate Conversions ---
+
+    def time_to_visual(self, t: float) -> float:
+        """Map real time in seconds to visually collapsed time."""
+        if not self.collapsed_gaps:
+            return t
+        cum_saved = 0.0
+        for g in self.collapsed_gaps:
+            if t < g.real_start:
+                return t - cum_saved
+            elif t <= g.real_end:
+                ratio = (t - g.real_start) / g.real_duration
+                return g.vis_start + (ratio * g.visual_duration)
+            else:
+                cum_saved += g.saved
+        return t - cum_saved
+
+    def visual_to_time(self, v: float) -> float:
+        """Inverse mapping: convert visually collapsed time back to exact real time."""
+        if not self.collapsed_gaps:
+            return v
+        cum_saved = 0.0
+        for g in self.collapsed_gaps:
+            if v < g.vis_start:
+                return v + cum_saved
+            elif v <= g.vis_end:
+                ratio = (v - g.vis_start) / max(0.001, g.visual_duration)
+                return g.real_start + (ratio * g.real_duration)
+            else:
+                cum_saved += g.saved
+        return v + cum_saved
+
+    def time_to_x(self, t: float) -> float:
+        return self.time_to_visual(t) * self.px_per_sec
+
+    def x_to_time(self, x: float) -> float:
+        v = max(0.0, x / max(1.0, self.px_per_sec))
+        t = self.visual_to_time(v)
+        if self.total_timeline_duration > 0:
+            return min(t, self.total_timeline_duration)
+        return t
+
     def _update_dimensions(self):
-        width = int(math.ceil(self.total_timeline_duration * self.px_per_sec)) + 200
+        vis_dur = self.total_visual_duration if self.total_visual_duration > 0 else self.total_timeline_duration
+        width = int(math.ceil(vis_dur * self.px_per_sec)) + 120
         self.set_content_width(max(800, width))
         self.set_content_height(320)
 
     def set_zoom(self, px_per_sec: float):
-        """Set horizontal zoom factor in pixels per second."""
         self.px_per_sec = max(self.MIN_PX_PER_SEC, min(self.MAX_PX_PER_SEC, px_per_sec))
         self._update_dimensions()
         self.queue_draw()
@@ -172,17 +264,6 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def zoom_out(self):
         self.set_zoom(self.px_per_sec / 1.3)
-
-    # --- Coordinate conversions ---
-
-    def time_to_x(self, t: float) -> float:
-        return t * self.px_per_sec
-
-    def x_to_time(self, x: float) -> float:
-        t = max(0.0, x / max(1.0, self.px_per_sec))
-        if self.total_timeline_duration > 0:
-            return min(t, self.total_timeline_duration)
-        return t
 
     # --- Event Handlers ---
 
@@ -222,7 +303,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         if keyval == Gdk.KEY_space:
             self.space_held = False
             if self.scrub_active:
-                # Letting go of space stops the scrubbed audition
+                # Releasing Space stops Dorico audition
                 self.scrub_active = False
                 self.scrub_cursor_time = None
                 self.player.end_scrub()
@@ -250,11 +331,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.grab_focus()
         t = self.x_to_time(x)
 
-        # Check if click was on header area (for star or marker chips)
+        # Header area: check stars and marker chips
         if y <= self.HEADER_HEIGHT:
             for item in self.session_items:
                 item_x = self.time_to_x(item.timeline_offset)
-                # Check star button click: 18px box near item_x + 6
                 if item_x + 4 <= x <= item_x + 28 and 8 <= y <= 32:
                     new_star = not item.session.starred
                     item.session.starred = new_star
@@ -263,7 +343,6 @@ class TimelineCanvas(Gtk.DrawingArea):
                     self.queue_draw()
                     return
 
-                # Check marker chip clicks
                 for m in item.midi_data.markers:
                     mx = self.time_to_x(item.timeline_offset + m.time)
                     if abs(x - mx) <= 12:
@@ -271,10 +350,8 @@ class TimelineCanvas(Gtk.DrawingArea):
                         self.queue_draw()
                         return
 
-        # Regular timeline click seeks playhead
         state = gesture.get_current_event_state()
         if not (state & Gdk.ModifierType.SHIFT_MASK):
-            # Clear marquee selection unless Shift is held
             self.selection_range = None
             if self.on_selection_changed:
                 self.on_selection_changed(None)
@@ -309,7 +386,6 @@ class TimelineCanvas(Gtk.DrawingArea):
     def _on_scroll(self, controller, dx, dy):
         state = controller.get_current_event_state()
         if state & Gdk.ModifierType.CONTROL_MASK:
-            # Zoom horizontally
             if dy < 0:
                 self.zoom_in()
             elif dy > 0:
@@ -324,18 +400,15 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.queue_draw()
 
     def jump_to_latest_session(self):
-        """Default start position: beginning of the last/live session."""
         if not self.session_items:
             self.player.seek(0.0)
             return
-
         last_item = self.session_items[-1]
         self.player.seek(last_item.timeline_offset)
         self.queue_draw()
 
     def jump_to_prev_file(self):
         curr_t = self.player.current_time
-        # Find preceding session
         for item in reversed(self.session_items):
             if item.timeline_offset < curr_t - 0.2:
                 self.player.seek(item.timeline_offset)
@@ -355,7 +428,6 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.queue_draw()
 
     def jump_to_day(self, target_date: datetime):
-        """Jump to the first session recorded on target_date."""
         for item in self.session_items:
             st = item.session.start_time
             if st.year == target_date.year and st.month == target_date.month and st.day == target_date.day:
@@ -363,10 +435,9 @@ class TimelineCanvas(Gtk.DrawingArea):
                 self.queue_draw()
                 return
 
-    # --- Cairo Drawing Function ---
+    # --- Cairo Drawing ---
 
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
-        # Background
         cr.set_source_rgb(0.12, 0.12, 0.13)
         cr.paint()
 
@@ -374,10 +445,11 @@ class TimelineCanvas(Gtk.DrawingArea):
         roll_bottom = height - self.FOOTER_HEIGHT
         roll_h = max(10.0, roll_bottom - roll_top)
 
-        # Draw session columns and note events
+        # 1. Draw sessions and notes
         for item in self.session_items:
             item_x = self.time_to_x(item.timeline_offset)
-            item_w = self.time_to_x(item.duration)
+            item_end_x = self.time_to_x(item.end_timeline_offset)
+            item_w = max(4.0, item_end_x - item_x)
 
             # Session background tint
             if item.session.is_live:
@@ -394,20 +466,10 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.line_to(item_x, height)
             cr.stroke()
 
-            # Session Header (Badge)
+            # Session Header badge
             self._draw_session_header(cr, item, item_x, item_w)
 
-            # Section Dividers (>= 3.0s silence)
-            for sec in item.midi_data.sections:
-                sec_x = self.time_to_x(item.timeline_offset + sec.start_time)
-                cr.set_source_rgba(0.4, 0.5, 0.6, 0.3)
-                cr.set_dash([3.0, 3.0])
-                cr.move_to(sec_x, roll_top)
-                cr.line_to(sec_x, roll_bottom)
-                cr.stroke()
-            cr.set_dash([])  # Reset dash
-
-            # Draw Notes in Piano Roll
+            # Draw Notes & Pedal Tails
             notes = item.midi_data.notes
             if notes:
                 min_p = min(n.pitch for n in notes)
@@ -416,64 +478,116 @@ class TimelineCanvas(Gtk.DrawingArea):
 
                 for n in notes:
                     nx = self.time_to_x(item.timeline_offset + n.start_time)
-                    nw = max(3.0, self.time_to_x(n.duration))
-                    # Invert Y: higher pitch -> higher position
+                    played_end_t = item.timeline_offset + n.played_end_time
+                    key_x = self.time_to_x(played_end_t)
+                    key_w = max(3.0, key_x - nx)
+
                     norm_p = (n.pitch - min_p) / pitch_range
                     ny = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
 
-                    # Color by velocity
                     vel_ratio = max(0.2, min(1.0, n.velocity / 127.0))
-                    # Vibrant warm teal / cyan
-                    cr.set_source_rgba(0.18 * vel_ratio, 0.65 * vel_ratio, 0.95 * vel_ratio, 0.85)
 
-                    # Draw rounded note rectangle
-                    cr.rectangle(nx, ny, nw, 5.0)
+                    # 1. Solid bar: Actual played finger-held note
+                    cr.set_source_rgba(0.15 * vel_ratio, 0.65 * vel_ratio, 0.95 * vel_ratio, 0.9)
+                    cr.rectangle(nx, ny, key_w, 5.0)
                     cr.fill()
+
+                    # 2. Translucent glowing tail: Damper pedal sustain extension (if held past key release)
+                    if n.end_time > n.played_end_time + 0.05:
+                        pedal_end_t = item.timeline_offset + n.end_time
+                        pedal_x = self.time_to_x(pedal_end_t)
+                        tail_w = max(2.0, pedal_x - key_x)
+
+                        # Distinct soft sky-blue / lavender pedal color
+                        cr.set_source_rgba(0.35, 0.85, 0.75, 0.45)
+                        cr.rectangle(key_x, ny + 0.5, tail_w, 4.0)
+                        cr.fill()
+
+                        # Subtle dashed border for pedal extension
+                        cr.set_source_rgba(0.4, 0.9, 0.8, 0.8)
+                        cr.set_line_width(0.8)
+                        cr.set_dash([2.0, 2.0])
+                        cr.rectangle(key_x, ny + 0.5, tail_w, 4.0)
+                        cr.stroke()
+                        cr.set_dash([])
 
             # Clapper Marker Chips
             for m in item.midi_data.markers:
                 mx = self.time_to_x(item.timeline_offset + m.time)
                 self._draw_marker_chip(cr, m.text, mx, roll_top - 14.0)
 
-        # Draw Marquee Selection Overlay
+        # 2. Draw Collapsed Silence Break Folds (// [pause])
+        for gap in self.collapsed_gaps:
+            gx1 = self.time_to_x(gap.real_start)
+            gx2 = self.time_to_x(gap.real_end)
+            gw = max(6.0, gx2 - gx1)
+
+            # Shaded fold region
+            cr.set_source_rgba(0.1, 0.1, 0.12, 0.85)
+            cr.rectangle(gx1, roll_top, gw, roll_h)
+            cr.fill()
+
+            # Diagonal fold slashes (//)
+            cr.set_source_rgba(0.45, 0.5, 0.55, 0.6)
+            cr.set_line_width(1.5)
+            # Left slash
+            cr.move_to(gx1 + 2.0, roll_top + 4.0)
+            cr.line_to(gx1 + 8.0, roll_bottom - 4.0)
+            cr.stroke()
+            # Right slash
+            cr.move_to(gx2 - 8.0, roll_top + 4.0)
+            cr.line_to(gx2 - 2.0, roll_bottom - 4.0)
+            cr.stroke()
+
+            # Center Pause Pill
+            pause_sec = int(round(gap.real_duration))
+            if pause_sec >= 60:
+                p_text = f"// {pause_sec // 60}m {pause_sec % 60}s //"
+            else:
+                p_text = f"// {pause_sec}s //"
+
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(9.0)
+            cr.set_source_rgba(0.55, 0.6, 0.65, 0.8)
+            mid_x = (gx1 + gx2) / 2.0
+            cr.move_to(mid_x - 18.0, roll_top + (roll_h / 2.0) + 3.0)
+            cr.show_text(p_text)
+
+        # 3. Marquee Selection Overlay
         if self.selection_range:
             s_start, s_end = self.selection_range
             sel_x = self.time_to_x(s_start)
-            sel_w = max(2.0, self.time_to_x(s_end - s_start))
+            sel_w = max(2.0, self.time_to_x(s_end) - sel_x)
 
-            # Translucent selection fill
             cr.set_source_rgba(0.2, 0.5, 0.9, 0.25)
             cr.rectangle(sel_x, roll_top, sel_w, roll_h)
             cr.fill()
 
-            # Selection border handles
             cr.set_source_rgba(0.35, 0.65, 1.0, 0.9)
             cr.set_line_width(1.5)
             cr.rectangle(sel_x, roll_top, sel_w, roll_h)
             cr.stroke()
 
-        # Draw Time Ruler / Footer
+        # 4. Time Ruler / Footer
         self._draw_footer_ruler(cr, width, height)
 
-        # Draw Acoustic Scrub Line (if actively scrubbing)
+        # 5. Acoustic Scrub Line (Dorico Ctrl+Space audition)
         if self.scrub_active and self.scrub_cursor_time is not None:
             scrub_x = self.time_to_x(self.scrub_cursor_time)
-            # Glowing amber scrub line
-            cr.set_source_rgba(1.0, 0.7, 0.1, 0.9)
+            cr.set_source_rgba(1.0, 0.7, 0.1, 0.95)
             cr.set_line_width(2.0)
             cr.move_to(scrub_x, 0)
             cr.line_to(scrub_x, height)
             cr.stroke()
 
-        # Draw Playhead Cursor
+        # 6. Playhead Cursor
         play_x = self.time_to_x(self.player.current_time)
-        cr.set_source_rgba(0.9, 0.25, 0.25, 0.95)  # Vibrant playhead red
+        cr.set_source_rgba(0.9, 0.25, 0.25, 0.95)
         cr.set_line_width(2.0)
         cr.move_to(play_x, roll_top - 6.0)
         cr.line_to(play_x, height)
         cr.stroke()
 
-        # Playhead triangle head
         cr.move_to(play_x - 5.0, roll_top - 6.0)
         cr.line_to(play_x + 5.0, roll_top - 6.0)
         cr.line_to(play_x, roll_top)
@@ -481,7 +595,6 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.fill()
 
     def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float):
-        # Star icon
         star_char = "★" if item.session.starred else "☆"
         cr.set_source_rgb(0.95, 0.75, 0.15) if item.session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
         cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
@@ -489,7 +602,6 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.move_to(x + 6.0, 22.0)
         cr.show_text(star_char)
 
-        # Date & Device text
         cr.set_source_rgb(0.85, 0.85, 0.88)
         cr.set_font_size(11.0)
         date_str = item.session.start_time.strftime("%b %d, %H:%M")
@@ -499,7 +611,6 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.move_to(x + 24.0, 21.0)
         cr.show_text(badge)
 
-        # Duration & Notes count
         cr.set_source_rgb(0.6, 0.6, 0.65)
         cr.set_font_size(10.0)
         stats = f"{int(item.duration)}s • {item.session.note_count} notes"
@@ -507,20 +618,17 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.show_text(stats)
 
     def _draw_marker_chip(self, cr: cairo.Context, text: str, x: float, y: float):
-        # Chip background pill
         cr.set_source_rgba(0.2, 0.45, 0.3, 0.9)
         chip_w = min(80.0, max(24.0, len(text) * 6.5 + 8.0))
         cr.rectangle(x - 4.0, y - 10.0, chip_w, 15.0)
         cr.fill()
 
-        # Marker line
         cr.set_source_rgba(0.3, 0.8, 0.4, 0.9)
         cr.set_line_width(1.0)
         cr.move_to(x, y + 5.0)
         cr.line_to(x, self.HEADER_HEIGHT + 40.0)
         cr.stroke()
 
-        # Text label
         cr.set_source_rgb(1.0, 1.0, 1.0)
         cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
         cr.set_font_size(9.0)
@@ -534,7 +642,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.rectangle(0, ruler_y, width, self.FOOTER_HEIGHT)
         cr.fill()
 
-        # Tick marks every N seconds depending on zoom
+        # Step marks across timeline
         step_sec = 5.0 if self.px_per_sec >= 30.0 else (10.0 if self.px_per_sec >= 15.0 else 30.0)
         num_steps = int(self.total_timeline_duration / step_sec) + 1
 
@@ -545,11 +653,12 @@ class TimelineCanvas(Gtk.DrawingArea):
         for i in range(num_steps):
             t = i * step_sec
             tx = self.time_to_x(t)
+            if tx > width:
+                break
             cr.move_to(tx, ruler_y)
             cr.line_to(tx, ruler_y + 5.0)
             cr.stroke()
 
-            # Time text
             mins = int(t // 60)
             secs = int(t % 60)
             cr.move_to(tx + 2.0, ruler_y + 13.0)

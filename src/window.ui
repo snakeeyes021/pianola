@@ -46,7 +46,7 @@
             </child>
             <child type="start">
               <object class="GtkButton" id="btn_play_selection">
-                <property name="icon-name">edit-select-symbolic</property>
+                <property name="icon-name">pan-end-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Play from Selection Start (p)</property>
                 <property name="action-name">win.play_selection</property>
               </object>
@@ -190,9 +190,9 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="btn_drag_daw">
-                            <property name="label" translatable="yes">Drag to DAW</property>
+                            <property name="label" translatable="yes">Drag to Notation / DAW</property>
                             <property name="icon-name">audio-x-generic-symbolic</property>
-                            <property name="tooltip-text" translatable="yes">Click &amp; drag this into Bitwig, Reaper, Ardour, or Nautilus</property>
+                            <property name="tooltip-text" translatable="yes">Click and drag to Dorico, MuseScore, DAW, or file manager</property>
                             <style>
                               <class name="pill"/>
                             </style>

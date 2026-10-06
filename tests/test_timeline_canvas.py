@@ -177,6 +177,61 @@ def test_zoom_and_marquee():
     print("  ✓ Passed zoom math and marquee selection range.")
 
 
+def test_silence_compacting():
+    print('[TEST] test_silence_compacting...')
+    synth = NullSynthEngine()
+    player = AudioPlayer(synth=synth)
+    canvas = TimelineCanvas(player)
+
+    # Session with 10s playing, 60s silence (gap), 10s playing
+    s_midi = MidiData(
+        duration=80.0,
+        notes=[
+            NoteEvent(60, 100, 0.0, 10.0),
+            NoteEvent(64, 100, 70.0, 80.0)
+        ],
+        sections=[
+            Section(0.0, 10.0),
+            Section(70.0, 80.0)
+        ]
+    )
+    s = SessionRecord(
+        id=1,
+        start_time=datetime(2026, 10, 5, 12, 0),
+        end_time=datetime(2026, 10, 5, 12, 5),
+        duration_seconds=80.0,
+        active_play_seconds=20.0,
+        note_count=2,
+        device_name='Dev',
+        file_path='/tmp/s.mid',
+        _cached_midi=s_midi
+    )
+    canvas.load_sessions([s])
+
+    # Should detect 1 collapsed gap between 10.0s and 70.0s (60s silence)
+    assert len(canvas.collapsed_gaps) == 1
+    gap = canvas.collapsed_gaps[0]
+    assert gap.real_start == 10.0
+    assert gap.real_end == 70.0
+    assert gap.visual_duration == 2.0
+    assert gap.saved == 58.0
+
+    # Test coordinate mapping
+    v10 = canvas.time_to_visual(10.0)
+    assert v10 == 10.0
+    v70 = canvas.time_to_visual(70.0)
+    assert v70 == 12.0  # 10s + 2s collapsed gap
+    v80 = canvas.time_to_visual(80.0)
+    assert v80 == 22.0  # 80s - 58s saved = 22s visual
+
+    # Test inverse mapping
+    assert round(canvas.visual_to_time(10.0), 2) == 10.0
+    assert round(canvas.visual_to_time(12.0), 2) == 70.0
+    assert round(canvas.visual_to_time(22.0), 2) == 80.0
+
+    print('  ✓ Passed silence compacting and inverse mapping.')
+
+
 if __name__ == '__main__':
     if not has_display:
         print('[SKIP] No display server available in sandboxed terminal (Display is None); skipping UI widget tests.')
@@ -185,4 +240,5 @@ if __name__ == '__main__':
         test_timeline_session_mapping()
         test_timeline_navigation_and_jumps()
         test_zoom_and_marquee()
+        test_silence_compacting()
         print('All timeline tests passed successfully!')

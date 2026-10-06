@@ -473,10 +473,9 @@ class AudioPlayer:
         return self.duration
 
     def jump_prev_section(self) -> float:
-        """Jump to the start of the current or previous section."""
+        """Jump to the start of the previous section if within 1.2s of current section start, else start of current section."""
         curr = self.current_time
-        # Find preceding section start
-        prev_starts = [s.start_time for s in self.sections if s.start_time < curr - 0.2]
+        prev_starts = [s.start_time for s in self.sections if s.start_time < curr - 1.2]
         if prev_starts:
             target = prev_starts[-1]
         else:

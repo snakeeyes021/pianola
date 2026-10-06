@@ -47,10 +47,15 @@ class NoteEvent:
     start_time: float  # seconds
     end_time: float    # seconds
     channel: int = 0
+    key_end_time: Optional[float] = None  # Physical key release time (before pedal sustain)
 
     @property
     def duration(self) -> float:
         return max(0.0, self.end_time - self.start_time)
+
+    @property
+    def played_end_time(self) -> float:
+        return self.key_end_time if self.key_end_time is not None else self.end_time
 
 
 @dataclass
@@ -235,7 +240,7 @@ class MidiParser:
         open_notes: Dict[Tuple[int, int], List[Tuple[float, int]]] = {}
         # (channel, pitch) -> list of (start_time, velocity)
         sustain_pedal: Dict[int, bool] = {ch: False for ch in range(16)}
-        pedaled_notes: Dict[int, List[Tuple[int, float, int]]] = {ch: [] for ch in range(16)}
+        pedaled_notes: Dict[int, List[Tuple[int, float, float, int]]] = {ch: [] for ch in range(16)}
         # channel -> list of (pitch, start_time, velocity) waiting for pedal release
 
         initial_bpm = 120.0
@@ -268,9 +273,12 @@ class MidiParser:
                 sustain_pedal[channel] = is_down
                 if not is_down:
                     # Pedal released: finalize all notes that were released while pedal was held
-                    for pitch, start_t, vel in pedaled_notes[channel]:
+                    for pitch, start_t, key_rel_t, vel in pedaled_notes[channel]:
                         end_t = max(start_t + 0.05, current_time)
-                        notes.append(NoteEvent(pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t, channel=channel))
+                        notes.append(NoteEvent(
+                            pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
+                            channel=channel, key_end_time=key_rel_t
+                        ))
                     pedaled_notes[channel].clear()
             elif etype == "note_off":
                 channel, pitch, _ = payload
@@ -279,16 +287,22 @@ class MidiParser:
                     start_t, vel = open_notes[key].pop(0)
                     if sustain_pedal.get(channel, False):
                         # Key released but sustain pedal is holding the dampers open
-                        pedaled_notes[channel].append((pitch, start_t, vel))
+                        pedaled_notes[channel].append((pitch, start_t, current_time, vel))
                     else:
                         end_t = max(start_t + 0.02, current_time)
-                        notes.append(NoteEvent(pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t, channel=channel))
+                        notes.append(NoteEvent(
+                            pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
+                            channel=channel, key_end_time=end_t
+                        ))
 
         # Finalize lingering pedaled notes
         for channel, pnotes in pedaled_notes.items():
-            for pitch, start_t, vel in pnotes:
+            for pitch, start_t, key_rel_t, vel in pnotes:
                 end_t = max(start_t + 0.1, current_time)
-                notes.append(NoteEvent(pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t, channel=channel))
+                notes.append(NoteEvent(
+                    pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
+                    channel=channel, key_end_time=key_rel_t
+                ))
 
         # Close any lingering open keys
         for (channel, pitch), starts in open_notes.items():
