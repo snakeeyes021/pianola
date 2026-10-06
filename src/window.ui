@@ -192,7 +192,7 @@
                           <object class="GtkButton" id="btn_drag_daw">
                             <property name="label" translatable="yes">Drag to Notation / DAW</property>
                             <property name="icon-name">audio-x-generic-symbolic</property>
-                            <property name="tooltip-text" translatable="yes">Click and drag to Dorico, MuseScore, DAW, or file manager</property>
+                            <property name="tooltip-text" translatable="yes">Click and drag to DAW, Notation, or File Manager apps</property>
                             <style>
                               <class name="pill"/>
                             </style>
