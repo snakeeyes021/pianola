@@ -83,7 +83,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         self._setup_actions()
 
         # Setup Theme Selector inside Primary Menu Popover
-        self._setup_theme_selector()
+        self._setup_primary_menu()
 
         # Connect style manager dark notification for light/dark Cairo repaints
         style_mgr = Adw.StyleManager.get_default()
@@ -94,6 +94,34 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         # Auto-discover Midikeep archive on launch
         self.load_archive()
+
+    def _setup_primary_menu(self):
+        """Configure hamburger menu with dynamic Midikeep Archive entry when available."""
+        menu = Gio.Menu()
+
+        # Section 1: theme selector
+        s1 = Gio.Menu()
+        item_theme = Gio.MenuItem.new(None, None)
+        item_theme.set_attribute_value("custom", GLib.Variant("s", "theme_selector"))
+        s1.append_item(item_theme)
+        menu.append_section(None, s1)
+
+        # Section 2: Files & Archive
+        s2 = Gio.Menu()
+        if self.archive_mgr.archive_exists():
+            s2.append(_("Open Midikeep Archive"), "win.open_archive")
+        s2.append(_("Open File…"), "win.open")
+        s2.append(_("Export MIDI…"), "win.export")
+        menu.append_section(None, s2)
+
+        # Section 3: App info
+        s3 = Gio.Menu()
+        s3.append(_("Keyboard Shortcuts"), "app.shortcuts")
+        s3.append(_("About Pianola"), "app.about")
+        menu.append_section(None, s3)
+
+        self.btn_menu.set_menu_model(menu)
+        self._setup_theme_selector()
 
     def _setup_theme_selector(self):
         popover = self.btn_menu.get_popover()
@@ -158,6 +186,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def _setup_actions(self):
         actions = [
+            ("open_archive", lambda *_: self.load_archive()),
             ("open", self._on_action_open),
             ("export", self._on_action_export),
             ("play_pause", self._on_action_play_pause),
@@ -322,14 +351,19 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.canvas.load_sessions(sessions)
         self.player.set_multi_track_mode(self.btn_multi_track.get_active())
 
-        # Default start position: beginning of the last session
-        self.canvas.jump_to_latest_session()
+        # Default start position: beginning of today's sessions or latest session
+        target_t = self.canvas.jump_to_today_or_latest()
+        self.scroll_to_time(target_t)
 
         count = len(sessions)
         self.window_title.set_subtitle(f"Midikeep Archive • {count} {'take' if count == 1 else 'takes'}")
         self.is_archive_mode = True
         self.current_single_file_path = None
+        self.btn_calendar.set_visible(True)
+        self.btn_prev_day.set_visible(True)
+        self.btn_next_day.set_visible(True)
         self._update_nav_buttons()
+        self._setup_primary_menu()
 
     def load_file(self, filepath: str):
         """Open an external single MIDI file directly."""
@@ -339,10 +373,15 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.canvas.load_sessions([session])
             self.player.set_multi_track_mode(self.btn_multi_track.get_active())
             self.canvas.jump_to_archive_start()
+            self.scroll_to_time(0.0)
             self.window_title.set_subtitle(os.path.basename(filepath))
             self.is_archive_mode = False
             self.current_single_file_path = os.path.abspath(filepath)
+            self.btn_calendar.set_visible(False)
+            self.btn_prev_day.set_visible(False)
+            self.btn_next_day.set_visible(False)
             self._update_nav_buttons()
+            self._setup_primary_menu()
         except Exception as e:
             dialog = Adw.AlertDialog(
                 heading="Could Not Open File",

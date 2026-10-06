@@ -153,6 +153,7 @@ class TimelineCanvas(Gtk.DrawingArea):
 
         # Click gesture for cursor positioning / markers / stars
         click = Gtk.GestureClick.new()
+        click.set_button(0)  # Receive all mouse buttons (left, middle, right)
         click.connect("pressed", self._on_click_pressed)
         self.add_controller(click)
 
@@ -385,11 +386,17 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.hadj.set_page_size(viewport_w)
 
     def set_zoom(self, px_per_sec: float, pivot_x: Optional[float] = None):
-        if pivot_x is None:
-            viewport_w = float(self.get_width() or 800.0)
-            pivot_x = viewport_w / 2.0
-
+        viewport_w = float(self.get_width() or 800.0)
         old_val = self.hadj.get_value()
+
+        if pivot_x is None:
+            # If the playhead cursor is visible in the viewport, zoom to cursor; else center
+            play_cx = self.time_to_x(self.player.current_time)
+            page_size = self.hadj.get_page_size()
+            if old_val <= play_cx <= old_val + page_size:
+                pivot_x = play_cx - old_val
+            else:
+                pivot_x = viewport_w / 2.0
         world_x = old_val + pivot_x
         pivot_time = self.x_to_time(world_x)
 
@@ -710,7 +717,10 @@ class TimelineCanvas(Gtk.DrawingArea):
             return True
 
         state = controller.get_current_event_state()
-        if state & Gdk.ModifierType.CONTROL_MASK:
+        is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        is_auditioning = self.scrub_active or self.space_held
+
+        if is_ctrl and not is_auditioning:
             pivot_x = getattr(self, "hover_mouse_x", None)
             if pivot_x is None:
                 pivot_x = float(self.get_width() or 800.0) / 2.0
@@ -725,11 +735,36 @@ class TimelineCanvas(Gtk.DrawingArea):
             max_val = max(0.0, self.hadj.get_upper() - self.hadj.get_page_size())
             new_val = max(0.0, min(max_val, self.hadj.get_value() + step))
             self.hadj.set_value(new_val)
+
+            # If actively auditioning, update audible notes under cursor at new scroll position
+            if self.scrub_active:
+                world_x = getattr(self, "hover_mouse_x", 0.0) + new_val
+                new_t = self.x_to_time(world_x)
+                self.scrub_cursor_time = new_t
+                self.player.audit_at(new_t)
+
             self.queue_draw()
             return True
         return False
 
     # --- Hierarchical Jump Functions ---
+
+    def jump_to_today_or_latest(self) -> float:
+        """Jump to beginning of today's sessions, or latest session if none today."""
+        today = datetime.now().date()
+        today_group = self.day_groups.get(today)
+        if today_group and today_group.items:
+            target_t = today_group.start_offset
+        elif self.ordered_days and self.ordered_days[-1].items:
+            target_t = self.ordered_days[-1].start_offset
+        elif self.session_items:
+            target_t = self.session_items[-1].timeline_offset
+        else:
+            target_t = 0.0
+
+        self.player.seek(target_t)
+        self.queue_draw()
+        return target_t
 
     def jump_to_archive_start(self):
         self.player.seek(0.0)
