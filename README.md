@@ -1,7 +1,7 @@
-# Pianola 🎹
+# Pianola
 
 <p align="center">
-  <strong>A modern, lightweight MIDI timeline browser, acoustic scrubber, and Midikeep companion for GNOME.</strong>
+  <strong>A minimal MIDI timeline browser, acoustic scrubber, and Midikeep companion for GNOME.</strong>
 </p>
 
 <p align="center">
@@ -12,107 +12,80 @@
 
 ---
 
-**Pianola** (`tech.redfoxlabs.Pianola`) is an HIG-compliant GNOME/Libadwaita application designed to preview, audit, and timeline-browse MIDI recordings. Built as the graphical companion to [Midikeep](https://github.com/snakeeyes021/midikeep) (the background MIDI capture daemon on RedFoxOS), Pianola eliminates the friction of opening a heavy DAW just to audition ideas, find a take, or slice out a musical motif.
+**Pianola** is a lightweight GTK 4 / Libadwaita application for previewing, scrubbing, and browsing MIDI recordings. It can be used as a standalone player for any Standard MIDI File, or as the graphical companion to Midikeep, the background MIDI capture service on [RedFox OS](https://github.com/snakeeyes021/redfox-os).
 
-Pianola focuses strictly on **audition and timeline retrieval**: continuous infinite scroll, acoustic scrubbing, silence compacting, multi-track instrument lanes, marquee selection, and native drag-and-drop into DAWs or score editors. Zero bloat, no score formatting, no heavy mixing consoles.
-
----
-
-## ✨ Features
-
-### 🔍 Auto-Discovery & Single-File Player
-* **Midikeep Companion:** On launch, Pianola automatically detects `~/.local/share/midikeep/index.db` and loads your entire archive into a continuous timeline, positioning the playhead right at your latest take (or live recording journal).
-* **Standalone MIDI Player:** Pass any `.mid` file on the command line, double-click a file in Nautilus, or press `Ctrl+O` to open and audition any Standard MIDI File.
-
-### 🎧 Acoustic Scrubbing & General MIDI Synthesis
-* **Dorico-Style Acoustic Scrub:** Hold `Ctrl + Space` and glide the mouse anywhere across the piano roll to instantly audit and sustain whatever notes or chords the cursor rolls over.
-* **FluidSynth Engine:** Bundled with FluidSynth and the high-fidelity `FluidR3_GM` SoundFont, delivering clean General MIDI playback without clicks or pops.
-* **Multi-Instrument Program Change Routing:** Automatically routes General MIDI program changes across all 16 MIDI channels, so orchestral, pop, and chamber MIDI files (e.g. Violin + Piano) play with their authentic instrument sounds simultaneously.
-
-### 📜 Continuous Timeline & Silence Compacting
-* **Infinite Continuous Scroll:** Seamlessly pan across hundreds of takes and multiple recording sessions along a single horizontal axis.
-* **Silence Compacting:** Silences $\ge 3$ seconds are automatically collapsed into compact 2-second visual folds (`// [pause] //`), so you never get lost scrolling through empty silence.
-* **Middle C (C4) Guide:** Dedicated guide lines anchor the pitch axis across both light and dark themes.
-* **Pedal Sustain Tails:** Distinct visual distinction between actual finger-held key durations (solid bars) and damper pedal (CC 64) sustain resonance (glowing translucent tails).
-
-### 🎛️ Multi-Track & Instrument View (`Ctrl+T`)
-* **Dynamic Lane Heights:** Press `Ctrl+T` or click the toggle button in the bottom bar to switch from unified roll mode to multi-track mode. Pianola allocates vertical lane heights dynamically proportional to the vertical pitch spread of each instrument's material.
-* **Color-Coded Instrument Families:** Solo strings, pianos, brass, reeds, guitars, and percussion each receive curated visual palettes.
-* **Left-Pinned Gutter Badges:** Instrument icons (🎻, 🎹, 🎺, 🎸, 🥁), channel badges, and real-time sounding indicator lights tell you exactly what instrument is playing.
-
-### 🖱️ Marquee Selection & Native Drag-and-Drop
-* **Time Span Selection:** Click and drag across the timeline canvas to marquee-select a time region across takes or within a single take.
-* **Direct DAW Drag-and-Drop:** Drag your selection directly out of Pianola and drop it into **Bitwig, Reaper, Ardour, Dorico, MuseScore, or Nautilus**. Multi-format drag sources (`GdkFileList`, `text/uri-list`, `text/plain`) ensure seamless compatibility even under Wine.
-* **Direct Export (`Ctrl+E`):** Export selected marquee slices or whole takes to standalone `.mid` files with one click.
-
-### 📌 Navigation & Clapper Markers
-* **Section Jumps:** Silences $\ge 3$ seconds demarcate musical sections; jump between section boundaries instantly using `[` and `]`.
-* **Hierarchical Navigation:** Jump between files, recording days (`Alt+Left` / `Alt+Right`), and archive boundaries.
-* **Calendar Date Picker:** Jump directly to any date in your recording history.
-* **Musician Clappers:** Standard MIDI Marker meta-events (`0xFF 0x06`) are highlighted as interactive green chips. Star takes directly from session headers.
+Instead of opening a full DAW just to find a take or audit an idea, Pianola provides fast acoustic scrubbing, quick section jumps, multi-track viewing, marquee selection, and direct drag-and-drop into DAWs and notation editors.
 
 ---
 
-## ⌨️ Keyboard Shortcuts
+## Features
+
+### Core MIDI Player
+These features work with any standard `.mid` file opened via the file chooser, file manager, or command line:
+
+* **Acoustic Scrubbing:** Hold `Ctrl + Space` and roll the mouse across notes to audition and sustain chords, similar to notation editors.
+* **SoundFont Synthesis:** Built-in FluidSynth playback supporting standard General MIDI soundfonts.
+* **Multi-Track View:** Toggle between a unified roll and separate instrument lanes (`Ctrl+T`), sized proportionally to each instrument's pitch range.
+* **Silence Compacting:** Extended pauses are collapsed visually on the timeline to keep takes compact.
+* **Section Jumps:** Jump between musical phrases and sections using `[` and `]`.
+* **Pedal Sustain Display:** Visual distinction between key presses and damper pedal (CC 64) resonance tails.
+* **Marquee Selection & DAW Drag-and-Drop:** Click and drag to select any time region, then drag the selection directly into DAWs (Bitwig, Reaper, Ardour), notation software, or file managers.
+* **Export:** Save selected time slices or entire takes directly to `.mid` files (`Ctrl+E`).
+
+### Midikeep Archive Companion
+When running on RedFox OS or systems with the [Midikeep](https://github.com/snakeeyes021/redfox-os) recording daemon, Pianola automatically detects the archive and provides extended history navigation:
+
+* **Automatic Archive Loading:** Opens directly into your recording timeline on launch, positioning the view at your latest take.
+* **Continuous History Scroll:** Pan seamlessly across recording sessions spanning days, months, and years.
+* **Date & Day Navigation:** Jump between recording days (`Alt+Left` / `Alt+Right`), inspect the day's activity overview minimap, or jump directly to any date with the calendar popover.
+* **Clapper Markers & Starred Takes:** Visual markers for flagged takes with one-click navigation and favorite toggles.
+
+---
+
+## Keyboard Shortcuts
 
 | Shortcut | Action |
 | :--- | :--- |
-| `Space` | Play / Pause from playhead cursor |
-| `p` | Play / Pause from marquee selection |
-| `Ctrl + Space` + mouse | Acoustic hover sustain scrub (Dorico audition) |
-| `]` | Jump to next musical section ($\ge 3$s silence) |
-| `[` | Jump to previous musical section |
-| `Alt + Right` / `Alt + ]` | Jump to next recording day |
-| `Alt + Left` / `Alt + [` | Jump to previous recording day |
-| `Ctrl + T` | Toggle Multi-Track instrument lanes |
-| `Ctrl + +` / `Ctrl + =` | Zoom in timeline |
-| `Ctrl + -` | Zoom out timeline |
-| `Ctrl + Wheel` | Horizontal zoom under cursor |
-| `Ctrl + O` | Open external MIDI file |
-| `Ctrl + E` | Export selection slice or take |
-| `Ctrl + Q` | Quit application |
-| `Ctrl + ?` | View all keyboard shortcuts |
+| `Space` | Play / Pause from cursor |
+| `p` | Play / Pause from start of selection |
+| `Ctrl + Space` + mouse | Acoustic hover scrub |
+| `]` / `[` | Jump to next / previous section |
+| `Alt + Right` / `Alt + Left` | Jump to next / previous day *(archive mode)* |
+| `Ctrl + T` | Toggle Multi-Track lanes |
+| `Ctrl + +` / `Ctrl + -` | Zoom in / out |
+| `Ctrl + Wheel` | Zoom at cursor (or scroll during audition) |
+| `Middle Click` + drag | Smooth pan / autoscroll |
+| `Ctrl + O` | Open MIDI file |
+| `Ctrl + E` | Export selection or take |
+| `Ctrl + Q` | Quit |
+| `Ctrl + ?` | Show all keyboard shortcuts |
 
 ---
 
-## 🏗️ Architecture
+## Building & Installation
 
-```
-Pianola (GTK 4 / Libadwaita / Python 3)
-├── src/archive.py          # Midikeep SQLite index reader, SMF parser, sections, GM metadata
-├── src/player.py           # FluidSynth ctypes binding, PulseAudio fallback, scrub engine
-├── src/timeline_canvas.py   # Cairo 2D continuous timeline, silence folding, multi-track lanes
-├── src/piano_keyboard.py    # Vertical keybed gutter & real-time multi-track sounding lights
-├── src/overview_minimap.py  # Global archive timeline minimap & day density navigation
-└── src/window.py           # Application window, drag-and-drop provider, actions
-```
-
----
-
-## 🚀 Building & Installation
-
-### Option 1: Flatpak (Recommended)
-Pianola is packaged as a standard Flatpak sandbox using GNOME 47 Runtime and includes FluidSynth and FluidR3_GM:
+### Flatpak (Recommended)
+Pianola is packaged as a Flatpak using the GNOME 47 runtime:
 
 ```bash
 # Build and install locally
 flatpak-builder --user --install --force-clean build-dir tech.redfoxlabs.Pianola.json
 
-# Run Pianola
+# Run
 flatpak run tech.redfoxlabs.Pianola
 ```
 
-### Option 2: GNOME Builder
+### GNOME Builder
 1. Clone the repository:
    ```bash
    git clone https://github.com/snakeeyes021/pianola.git
    cd pianola
    ```
-2. Open the project in **GNOME Builder**.
-3. Select the Flatpak runtime and click **Run** (`Ctrl+F5`).
+2. Open the project in GNOME Builder.
+3. Select the Flatpak runtime and run (`Ctrl+F5`).
 
-### Option 3: Local Meson Setup (Development)
-Ensure system dependencies are installed (`python3-gobject`, `gtk4`, `libadwaita-1`, `fluidsynth`, `cairo`):
+### Local Meson Build
+Requires `python3-gobject`, `gtk4`, `libadwaita-1`, `fluidsynth`, and `cairo`:
 
 ```bash
 meson setup _build
@@ -122,18 +95,19 @@ meson compile -C _build
 
 ---
 
-## 🧪 Testing
+## Testing
 
-Run unit tests covering SMF parsing, 3-second silence section boundaries, CC 64 sustain pedal extensions, multi-track GM routing, and transport scrubbing:
+Run unit tests covering MIDI parsing, section detection, multi-track routing, and playback logic:
 
 ```bash
 python3 tests/test_archive.py
 python3 tests/test_player.py
+python3 tests/test_overview_minimap.py
+python3 tests/test_timeline_canvas.py
 ```
 
 ---
 
-## 📄 License & Attribution
+## License
 
-* **Pianola:** Copyright © 2026 Matthew Samson / RedFoxLabs. Licensed under [GPL-3.0-or-later](LICENSE).
-* **FluidR3_GM SoundFont:** Frank Wen / SoundFont Community (MIT-style soundfont license).
+Copyright © 2026 Matthew Samson / Red Fox Labs. Licensed under [GPL-3.0-or-later](COPYING).
