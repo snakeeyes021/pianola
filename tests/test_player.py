@@ -146,8 +146,44 @@ def test_transport_playback():
     print("  ✓ Passed transport playback, pause, seek, and tick callbacks.")
 
 
+def test_program_change_dispatch():
+    print("[TEST] test_program_change_dispatch...")
+    from src.archive import TrackInfo
+    synth = NullSynthEngine()
+    player = AudioPlayer(synth=synth)
+
+    tracks = [
+        TrackInfo(track_index=0, channel=0, name="Violin", program=40, instrument_name="Violin", min_pitch=60, max_pitch=72, note_count=5),
+        TrackInfo(track_index=1, channel=1, name="Acoustic Grand Piano", program=0, instrument_name="Acoustic Grand Piano", min_pitch=40, max_pitch=80, note_count=10),
+    ]
+    program_changes = [
+        (0.0, 0, 40),
+        (0.0, 1, 0),
+        (5.0, 0, 41), # Switch violin to viola at 5.0s
+    ]
+
+    notes = [
+        NoteEvent(pitch=60, velocity=100, start_time=1.0, end_time=3.0, channel=0),
+        NoteEvent(pitch=48, velocity=100, start_time=1.0, end_time=3.0, channel=1),
+    ]
+
+    data = MidiData(duration=10.0, notes=notes, tracks=tracks, program_changes=program_changes)
+    player.load_midi_data(data)
+
+    # Initial program changes should have been applied for both tracks
+    assert (0, 40) in synth.program_changes_received, "Initial violin program change not received"
+    assert (1, 0) in synth.program_changes_received, "Initial piano program change not received"
+
+    # Seek to 6.0s (past the program change at 5.0s)
+    player.seek(6.0)
+    assert (0, 41) in synth.program_changes_received, "Mid-stream program change on seek not received"
+
+    print("  ✓ Passed multi-instrument program change dispatch and seek synchronization.")
+
+
 if __name__ == "__main__":
     test_acoustic_scrubbing()
     test_bidirectional_gap_and_section_skipping()
     test_transport_playback()
+    test_program_change_dispatch()
     print("\n🎉 ALL PLAYER TESTS PASSED SUCCESSFULLY!")

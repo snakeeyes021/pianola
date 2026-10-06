@@ -54,6 +54,9 @@ class BaseSynth:
     def all_notes_off(self):
         pass
 
+    def program_change(self, channel: int, program: int):
+        pass
+
     def close(self):
         pass
 
@@ -121,6 +124,10 @@ class FluidSynthEngine(BaseSynth):
         self._lib.fluid_synth_all_notes_off.argtypes = [ctypes.c_void_p, ctypes.c_int]
         self._lib.fluid_synth_all_notes_off.restype = ctypes.c_int
 
+        if hasattr(self._lib, "fluid_synth_program_change"):
+            self._lib.fluid_synth_program_change.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+            self._lib.fluid_synth_program_change.restype = ctypes.c_int
+
         # Initialize settings
         self._settings = self._lib.new_fluid_settings()
         if not self._settings:
@@ -161,6 +168,10 @@ class FluidSynthEngine(BaseSynth):
             for ch in range(16):
                 self._lib.fluid_synth_all_notes_off(self._synth, ch)
 
+    def program_change(self, channel: int, program: int):
+        if self._lib and self._synth and hasattr(self._lib, "fluid_synth_program_change"):
+            self._lib.fluid_synth_program_change(self._synth, int(channel), int(program))
+
     def close(self):
         if self._lib:
             self.all_notes_off()
@@ -181,6 +192,10 @@ class NullSynthEngine(BaseSynth):
 
     def __init__(self):
         self.active_sounding_notes: Set[tuple] = set()
+        self.program_changes_received: List[Tuple[int, int]] = []
+
+    def program_change(self, channel: int, program: int):
+        self.program_changes_received.append((channel, program))
 
     def note_on(self, channel: int, pitch: int, velocity: int):
         self.active_sounding_notes.add((channel, pitch))
@@ -342,6 +357,9 @@ class AudioPlayer:
         self.notes: List[NoteEvent] = []
         self.sections: List[Section] = []
         self.duration: float = 0.0
+        self.tracks: list = []
+        self.program_changes: list = []
+        self._last_applied_prog: dict = {}
 
         # Playback transport state
         self.is_playing: bool = False
@@ -370,7 +388,14 @@ class AudioPlayer:
             self.notes = sorted(midi_data.notes, key=lambda n: n.start_time)
             self.sections = midi_data.sections
             self.duration = midi_data.duration
+            self.tracks = getattr(midi_data, "tracks", [])
+            self.program_changes = sorted(getattr(midi_data, "program_changes", []), key=lambda x: x[0])
             self.current_time = 0.0
+
+            # Send initial program changes for each track
+            for trk in self.tracks:
+                self.synth.program_change(trk.channel, trk.program)
+                self._last_applied_prog[trk.channel] = trk.program
 
     def play(self, from_time: Optional[float] = None):
         """Start or resume playback from specified position or current position."""
@@ -431,6 +456,14 @@ class AudioPlayer:
             self._start_monotonic = time.monotonic()
             self._start_seek_offset = target_time
             self._silence_all_playback_notes()
+
+            # Apply program changes up to target_time
+            progs = dict(self._last_applied_prog)
+            for t, ch, prog in self.program_changes:
+                if t <= target_time:
+                    progs[ch] = prog
+            for ch, prog in progs.items():
+                self.synth.program_change(ch, prog)
 
         if self.on_tick:
             self.on_tick(self.current_time)
@@ -545,6 +578,7 @@ class AudioPlayer:
                 if not self.is_playing:
                     break
 
+                prev_t = self.current_time
                 elapsed = now - self._start_monotonic
                 self.current_time = self._start_seek_offset + elapsed
 
@@ -558,6 +592,11 @@ class AudioPlayer:
                     if self.on_tick:
                         self.on_tick(self.current_time)
                     break
+
+                # Dispatch mid-playback program changes
+                for t, ch, prog in self.program_changes:
+                    if prev_t < t <= self.current_time:
+                        self.synth.program_change(ch, prog)
 
                 # Dispatch notes
                 sounding_now: Set[tuple] = set()

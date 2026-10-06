@@ -65,6 +65,12 @@
         </child>
         <child>
           <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes">Toggle Multi-Track View</property>
+            <property name="accelerator">&lt;Primary&gt;t</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem">
             <property name="title" translatable="yes">Zoom In</property>
             <property name="accelerator">&lt;Primary&gt;plus</property>
           </object>

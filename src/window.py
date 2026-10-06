@@ -37,6 +37,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     btn_prev_day = Gtk.Template.Child()
     btn_next_day = Gtk.Template.Child()
     btn_menu = Gtk.Template.Child()
+    btn_multi_track = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -73,6 +74,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         self._setup_drag_source()
 
         # Connect UI toggles
+        self.btn_multi_track.connect("toggled", self._on_multi_track_toggled)
 
         # Register window actions
         self._setup_actions()
@@ -163,6 +165,7 @@ class PianolaWindow(Adw.ApplicationWindow):
             ("next_day", lambda *_: self._on_next_day_clicked(None)),
             ("zoom_in", lambda *_: self.canvas.zoom_in()),
             ("zoom_out", lambda *_: self.canvas.zoom_out()),
+            ("toggle_multi_track", self._on_action_toggle_multi_track),
         ]
         for name, callback in actions:
             action = Gio.SimpleAction.new(name, None)
@@ -295,6 +298,15 @@ class PianolaWindow(Adw.ApplicationWindow):
     def _on_star_toggled(self, session: SessionRecord, new_state: bool):
         if session.id is not None:
             self.archive_mgr.set_starred(session.id, new_state)
+
+    def _on_multi_track_toggled(self, btn):
+        active = btn.get_active()
+        self.canvas.set_multi_track_mode(active)
+        self.keyboard.queue_draw()
+        self.canvas.queue_draw()
+
+    def _on_action_toggle_multi_track(self, action, param):
+        self.btn_multi_track.set_active(not self.btn_multi_track.get_active())
 
     def _on_selection_changed(self, sel_range: Optional[tuple]):
         if sel_range:

@@ -197,10 +197,59 @@ def test_sustain_pedal_parsing():
 
 
 
+def test_multi_track_parsing():
+    print('[TEST] test_multi_track_parsing...')
+    import struct, tempfile
+    from src.archive import get_gm_instrument_name, get_gm_instrument_icon, get_track_color
+
+    # Header: Type 1, 2 tracks, 480 ticks/quarter
+    header = struct.pack('>4sIHHH', b'MThd', 6, 1, 2, 480)
+
+    # Track 1: Violin (Program 40), Channel 0
+    t1_events = bytearray()
+    t1_events.extend(bytes([0x00, 0xC0, 40]))          # Program Change: Violin (40)
+    t1_events.extend(bytes([0x00, 0x90, 60, 100]))     # Note On (pitch 60)
+    t1_events.extend(bytes([0x81, 0x70, 0x80, 60, 0])) # Note Off at 240 ticks
+    t1_events.extend(bytes([0x00, 0xFF, 0x2F, 0x00]))  # End of track
+    t1_chunk = struct.pack('>4sI', b'MTrk', len(t1_events)) + bytes(t1_events)
+
+    # Track 2: Grand Piano (Program 0), Channel 1
+    t2_events = bytearray()
+    t2_events.extend(bytes([0x00, 0xC1, 0]))           # Program Change: Grand Piano (0)
+    t2_events.extend(bytes([0x00, 0x91, 48, 90]))      # Note On (pitch 48)
+    t2_events.extend(bytes([0x81, 0x70, 0x81, 48, 0])) # Note Off at 240 ticks
+    t2_events.extend(bytes([0x00, 0xFF, 0x2F, 0x00]))  # End of track
+    t2_chunk = struct.pack('>4sI', b'MTrk', len(t2_events)) + bytes(t2_events)
+
+    with tempfile.NamedTemporaryFile(suffix='.mid', delete=False) as f:
+        f.write(header + t1_chunk + t2_chunk)
+        tmp_name = f.name
+
+    try:
+        data = MidiParser.parse_file(tmp_name)
+        assert len(data.tracks) == 2, f'Expected 2 tracks, got {len(data.tracks)}'
+        assert data.tracks[0].program == 40
+        assert 'Violin' in data.tracks[0].instrument_name
+        assert data.tracks[0].min_pitch == 60 and data.tracks[0].max_pitch == 60
+        assert data.tracks[1].program == 0
+        assert 'Piano' in data.tracks[1].instrument_name
+        assert data.tracks[1].min_pitch == 48 and data.tracks[1].max_pitch == 48
+
+        assert get_gm_instrument_icon(40) == '🎻'
+        assert get_gm_instrument_icon(0) == '🎹'
+        color_v = get_track_color(program=40, channel=0)
+        color_p = get_track_color(program=0, channel=1)
+        assert color_v != color_p
+        print('  ✓ Passed multi-track multi-instrument parsing and GM metadata.')
+    finally:
+        os.unlink(tmp_name)
+
+
 if __name__ == "__main__":
     test_midi_write_and_parse()
     test_marquee_slice_export()
     test_sqlite_archive_operations()
     test_live_journal_detection()
     test_sustain_pedal_parsing()
+    test_multi_track_parsing()
     print("\n🎉 ALL ARCHIVE TESTS PASSED SUCCESSFULLY!")

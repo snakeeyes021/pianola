@@ -42,6 +42,22 @@ def get_midikeep_dir() -> str:
 
 
 @dataclass
+class TrackInfo:
+    track_index: int
+    channel: int = 0
+    name: str = ""
+    program: int = 0
+    instrument_name: str = "Acoustic Grand Piano"
+    min_pitch: int = 21
+    max_pitch: int = 108
+    note_count: int = 0
+
+    @property
+    def pitch_span(self) -> int:
+        return max(12, self.max_pitch - self.min_pitch + 1)
+
+
+@dataclass
 class NoteEvent:
     pitch: int
     velocity: int
@@ -49,6 +65,7 @@ class NoteEvent:
     end_time: float    # seconds
     channel: int = 0
     key_end_time: Optional[float] = None  # Physical key release time (before pedal sustain)
+    track_index: int = 0
 
     @property
     def duration(self) -> float:
@@ -84,6 +101,139 @@ class MidiData:
     sections: List[Section] = field(default_factory=list)
     tempo_bpm: float = 120.0
     key_signature: Optional[str] = None
+    tracks: List[TrackInfo] = field(default_factory=list)
+    program_changes: List[Tuple[float, int, int]] = field(default_factory=list)  # (time_sec, channel, program)
+GM_PROGRAM_NAMES = (
+    # Piano (0-7)
+    "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano",
+    "Electric Piano 1", "Electric Piano 2", "Harpsichord", "Clavinet",
+    # Chromatic Percussion (8-15)
+    "Celesta", "Glockenspiel", "Music Box", "Vibraphone",
+    "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
+    # Organ (16-23)
+    "Drawbar Organ", "Percussive Organ", "Rock Organ", "Church Organ",
+    "Reed Organ", "Accordion", "Harmonica", "Tango Accordion",
+    # Guitar (24-31)
+    "Acoustic Guitar (nylon)", "Acoustic Guitar (steel)", "Electric Guitar (jazz)", "Electric Guitar (clean)",
+    "Electric Guitar (muted)", "Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics",
+    # Bass (32-39)
+    "Acoustic Bass", "Electric Bass (finger)", "Electric Bass (pick)", "Fretless Bass",
+    "Slap Bass 1", "Slap Bass 2", "Synth Bass 1", "Synth Bass 2",
+    # Strings (40-47)
+    "Violin", "Viola", "Cello", "Contrabass",
+    "Tremolo Strings", "Pizzicato Strings", "Orchestral Harp", "Timpani",
+    # Ensemble (48-55)
+    "String Ensemble 1", "String Ensemble 2", "Synth Strings 1", "Synth Strings 2",
+    "Choir Aahs", "Voice Oohs", "Synth Choir", "Orchestra Hit",
+    # Brass (56-63)
+    "Trumpet", "Trombone", "Tuba", "Muted Trumpet",
+    "French Horn", "Brass Section", "Synth Brass 1", "Synth Brass 2",
+    # Reed (64-71)
+    "Soprano Sax", "Alto Sax", "Tenor Sax", "Baritone Sax",
+    "Oboe", "English Horn", "Bassoon", "Clarinet",
+    # Pipe (72-79)
+    "Piccolo", "Flute", "Recorder", "Pan Flute",
+    "Blown Bottle", "Shakuhachi", "Whistle", "Ocarina",
+    # Synth Lead (80-87)
+    "Lead 1 (square)", "Lead 2 (sawtooth)", "Lead 3 (calliope)", "Lead 4 (chiff)",
+    "Lead 5 (charang)", "Lead 6 (voice)", "Lead 7 (fifths)", "Lead 8 (bass + lead)",
+    # Synth Pad (88-95)
+    "Pad 1 (new age)", "Pad 2 (warm)", "Pad 3 (polysynth)", "Pad 4 (choir)",
+    "Pad 5 (bowed)", "Pad 6 (metallic)", "Pad 7 (halo)", "Pad 8 (sweep)",
+    # Synth Effects (96-103)
+    "FX 1 (rain)", "FX 2 (soundtrack)", "FX 3 (crystal)", "FX 4 (atmosphere)",
+    "FX 5 (brightness)", "FX 6 (goblins)", "FX 7 (echoes)", "FX 8 (sci-fi)",
+    # Ethnic (104-111)
+    "Sitar", "Banjo", "Shamisen", "Koto",
+    "Kalimba", "Bagpipe", "Fiddle", "Shanai",
+    # Percussive (112-119)
+    "Tinkle Bell", "Agogo", "Steel Drums", "Woodblock",
+    "Taiko Drum", "Melodic Tom", "Synth Drum", "Reverse Cymbal",
+    # Sound Effects (120-127)
+    "Guitar Fret Noise", "Breath Noise", "Seashore", "Bird Tweet",
+    "Telephone Ring", "Helicopter", "Applause", "Gunshot"
+)
+
+
+def get_gm_instrument_name(program: int, channel: int = 0) -> str:
+    """Return human-readable General MIDI instrument name."""
+    if channel == 9:
+        return "Standard Drums"
+    return GM_PROGRAM_NAMES[max(0, min(127, program))]
+
+
+def get_gm_instrument_icon(program: int, channel: int = 0) -> str:
+    """Return friendly emoji icon for instrument family."""
+    if channel == 9:
+        return "🥁"
+    p = max(0, min(127, program))
+    if p < 8:
+        return "🎹"
+    elif p < 16:
+        return "🔔"
+    elif p < 24:
+        return "⛪"
+    elif p < 32:
+        return "🎸"
+    elif p < 40:
+        return "🎸"
+    elif p < 48:
+        return "🎻"
+    elif p < 56:
+        return "👥"
+    elif p < 64:
+        return "🎺"
+    elif p < 72:
+        return "🎷"
+    elif p < 80:
+        return "🪈"
+    elif p < 88:
+        return "⚡"
+    elif p < 96:
+        return "🌊"
+    elif p < 112:
+        return "🪕"
+    elif p < 120:
+        return "🥁"
+    return "🎵"
+
+
+def get_track_color(program: int, channel: int = 0) -> Tuple[float, float, float]:
+    """Curated color for instrument family in dark and light modes."""
+    if channel == 9:
+        return (0.92, 0.30, 0.35)  # Crimson / Drums
+    p = max(0, min(127, program))
+    if p < 8:
+        return (0.12, 0.68, 0.92)  # Cyan / Piano
+    elif p < 16:
+        return (0.95, 0.75, 0.20)  # Gold / Chromatic
+    elif p < 24:
+        return (0.85, 0.55, 0.20)  # Amber / Organ
+    elif p < 32:
+        return (0.92, 0.45, 0.25)  # Terracotta / Guitar
+    elif p < 40:
+        return (0.65, 0.40, 0.88)  # Purple / Bass
+    elif p < 48:
+        return (0.95, 0.60, 0.20)  # Warm Gold / Solo Strings
+    elif p < 56:
+        return (0.30, 0.75, 0.85)  # Soft Teal / Ensemble
+    elif p < 64:
+        return (0.95, 0.50, 0.15)  # Orange / Brass
+    elif p < 72:
+        return (0.25, 0.80, 0.55)  # Emerald / Reeds
+    elif p < 80:
+        return (0.20, 0.85, 0.70)  # Mint / Pipes
+    elif p < 88:
+        return (0.95, 0.35, 0.65)  # Magenta / Synth Lead
+    elif p < 96:
+        return (0.45, 0.55, 0.95)  # Indigo / Synth Pad
+
+    palette = [
+        (0.12, 0.68, 0.92), (0.95, 0.60, 0.20), (0.25, 0.80, 0.55), (0.65, 0.40, 0.88),
+        (0.95, 0.50, 0.15), (0.95, 0.35, 0.65), (0.45, 0.55, 0.95), (0.92, 0.30, 0.35)
+    ]
+    return palette[channel % len(palette)]
+
 
 
 class MidiParser:
@@ -139,12 +289,11 @@ class MidiParser:
         raw_events = []  # (tick, priority, event_type, payload)
         # priority ensures tempo / meta events are processed before notes at same tick
 
-        for _ in range(num_tracks):
+        for track_idx in range(num_tracks):
             track_magic = stream.read(4)
             if not track_magic:
                 break
             if track_magic != b"MTrk":
-                # Unknown chunk, skip
                 chunk_len = struct.unpack(">I", stream.read(4))[0]
                 stream.seek(chunk_len, io.SEEK_CUR)
                 continue
@@ -166,7 +315,6 @@ class MidiParser:
                 status_byte = status_peek[0]
 
                 if status_byte < 0x80:
-                    # Running status
                     if running_status is None:
                         continue
                     status = running_status
@@ -179,12 +327,19 @@ class MidiParser:
 
                 # Process event
                 if status == 0xFF:
-                    # Meta Event
                     meta_type = tstream.read(1)[0]
                     meta_len = cls._read_vlq(tstream)
                     meta_bytes = tstream.read(meta_len)
 
-                    if meta_type == 0x51 and meta_len == 3:
+                    if meta_type == 0x03:
+                        # Track Name
+                        text = meta_bytes.decode("utf-8", errors="replace").strip()
+                        raw_events.append((curr_tick, 0, "track_name", (track_idx, text)))
+                    elif meta_type == 0x04:
+                        # Instrument Name
+                        text = meta_bytes.decode("utf-8", errors="replace").strip()
+                        raw_events.append((curr_tick, 0, "instrument_name", (track_idx, text)))
+                    elif meta_type == 0x51 and meta_len == 3:
                         # Set tempo
                         mpqn = (meta_bytes[0] << 16) | (meta_bytes[1] << 8) | meta_bytes[2]
                         raw_events.append((curr_tick, 0, "tempo", mpqn))
@@ -197,11 +352,9 @@ class MidiParser:
                         sf, mi = struct.unpack("bb", meta_bytes[:2])
                         raw_events.append((curr_tick, 1, "key_signature", (sf, mi)))
                 elif status in (0xF0, 0xF7):
-                    # SysEx
                     sysex_len = cls._read_vlq(tstream)
                     tstream.seek(sysex_len, io.SEEK_CUR)
                 else:
-                    # Channel event
                     event_type = status & 0xF0
                     channel = status & 0x0F
 
@@ -215,18 +368,19 @@ class MidiParser:
                     else:
                         b2 = 0
 
-                    if event_type == 0xB0 and b1 == 64:
+                    if event_type == 0xC0:
+                        # Program Change
+                        raw_events.append((curr_tick, 0, "program_change", (channel, b1, track_idx)))
+                    elif event_type == 0xB0 and b1 == 64:
                         # CC 64 Damper / Sustain Pedal
                         raw_events.append((curr_tick, 1, "sustain", (channel, b2)))
-
-                    if event_type == 0x90:
-                        # Note on (if b2 == 0, note off)
+                    elif event_type == 0x90:
                         if b2 > 0:
-                            raw_events.append((curr_tick, 2, "note_on", (channel, b1, b2)))
+                            raw_events.append((curr_tick, 2, "note_on", (channel, b1, b2, track_idx)))
                         else:
-                            raw_events.append((curr_tick, 2, "note_off", (channel, b1, 0)))
+                            raw_events.append((curr_tick, 2, "note_off", (channel, b1, 0, track_idx)))
                     elif event_type == 0x80:
-                        raw_events.append((curr_tick, 2, "note_off", (channel, b1, b2)))
+                        raw_events.append((curr_tick, 2, "note_off", (channel, b1, b2, track_idx)))
 
         # Sort raw events chronologically
         raw_events.sort(key=lambda x: (x[0], x[1]))
@@ -238,11 +392,16 @@ class MidiParser:
 
         notes: List[NoteEvent] = []
         markers: List[MarkerEvent] = []
-        open_notes: Dict[Tuple[int, int], List[Tuple[float, int]]] = {}
-        # (channel, pitch) -> list of (start_time, velocity)
+        open_notes: Dict[Tuple[int, int, int], List[Tuple[float, int]]] = {}
+        # (channel, pitch, track_idx) -> list of (start_time, velocity)
         sustain_pedal: Dict[int, bool] = {ch: False for ch in range(16)}
-        pedaled_notes: Dict[int, List[Tuple[int, float, float, int]]] = {ch: [] for ch in range(16)}
-        # channel -> list of (pitch, start_time, velocity) waiting for pedal release
+        pedaled_notes: Dict[int, List[Tuple[int, float, float, int, int]]] = {ch: [] for ch in range(16)}
+        # channel -> list of (pitch, start_time, key_release_time, velocity, track_idx)
+
+        track_names: Dict[int, str] = {}
+        track_programs: Dict[int, int] = {}
+        channel_programs: Dict[int, int] = {}
+        program_changes: List[Tuple[float, int, int]] = []
 
         initial_bpm = 120.0
         bpm_set = False
@@ -260,11 +419,23 @@ class MidiParser:
                 if not bpm_set:
                     initial_bpm = bpm
                     bpm_set = True
+            elif etype == "track_name":
+                trk_idx, name = payload
+                track_names[trk_idx] = name
+            elif etype == "instrument_name":
+                trk_idx, name = payload
+                if trk_idx not in track_names or not track_names[trk_idx]:
+                    track_names[trk_idx] = name
+            elif etype == "program_change":
+                ch, prog, trk_idx = payload
+                track_programs[trk_idx] = prog
+                channel_programs[ch] = prog
+                program_changes.append((current_time, ch, prog))
             elif etype == "marker":
                 markers.append(MarkerEvent(time=current_time, text=payload))
             elif etype == "note_on":
-                channel, pitch, vel = payload
-                key = (channel, pitch)
+                channel, pitch, vel, trk_idx = payload
+                key = (channel, pitch, trk_idx)
                 if key not in open_notes:
                     open_notes[key] = []
                 open_notes[key].append((current_time, vel))
@@ -273,48 +444,88 @@ class MidiParser:
                 is_down = val >= 64
                 sustain_pedal[channel] = is_down
                 if not is_down:
-                    # Pedal released: finalize all notes that were released while pedal was held
-                    for pitch, start_t, key_rel_t, vel in pedaled_notes[channel]:
+                    for pitch, start_t, key_rel_t, vel, trk_idx in pedaled_notes[channel]:
                         end_t = max(start_t + 0.05, current_time)
                         notes.append(NoteEvent(
                             pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
-                            channel=channel, key_end_time=key_rel_t
+                            channel=channel, key_end_time=key_rel_t, track_index=trk_idx
                         ))
                     pedaled_notes[channel].clear()
             elif etype == "note_off":
-                channel, pitch, _ = payload
-                key = (channel, pitch)
+                channel, pitch, _, trk_idx = payload
+                key = (channel, pitch, trk_idx)
                 if key in open_notes and open_notes[key]:
                     start_t, vel = open_notes[key].pop(0)
                     if sustain_pedal.get(channel, False):
-                        # Key released but sustain pedal is holding the dampers open
-                        pedaled_notes[channel].append((pitch, start_t, current_time, vel))
+                        pedaled_notes[channel].append((pitch, start_t, current_time, vel, trk_idx))
                     else:
                         end_t = max(start_t + 0.02, current_time)
                         notes.append(NoteEvent(
                             pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
-                            channel=channel, key_end_time=end_t
+                            channel=channel, key_end_time=end_t, track_index=trk_idx
                         ))
 
         # Finalize lingering pedaled notes
         for channel, pnotes in pedaled_notes.items():
-            for pitch, start_t, key_rel_t, vel in pnotes:
+            for pitch, start_t, key_rel_t, vel, trk_idx in pnotes:
                 end_t = max(start_t + 0.1, current_time)
                 notes.append(NoteEvent(
                     pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
-                    channel=channel, key_end_time=key_rel_t
+                    channel=channel, key_end_time=key_rel_t, track_index=trk_idx
                 ))
 
         # Close any lingering open keys
-        for (channel, pitch), starts in open_notes.items():
+        for (channel, pitch, trk_idx), starts in open_notes.items():
             for start_t, vel in starts:
                 end_t = max(start_t + 0.1, current_time)
-                notes.append(NoteEvent(pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t, channel=channel))
+                notes.append(NoteEvent(
+                    pitch=pitch, velocity=vel, start_time=start_t, end_time=end_t,
+                    channel=channel, track_index=trk_idx
+                ))
 
         notes.sort(key=lambda n: n.start_time)
         duration = current_time if notes or markers else 0.0
         if notes:
             duration = max(duration, max(n.end_time for n in notes))
+
+        # Build distinct TrackInfo list
+        tracks: List[TrackInfo] = []
+        track_groups: Dict[Tuple[int, int], List[NoteEvent]] = {}
+        for n in notes:
+            k = (n.track_index, n.channel)
+            if k not in track_groups:
+                track_groups[k] = []
+            track_groups[k].append(n)
+
+        if track_groups:
+            for (trk_idx, ch), t_notes in sorted(track_groups.items(), key=lambda x: (x[0][0], x[0][1])):
+                prog = track_programs.get(trk_idx, channel_programs.get(ch, 0))
+                inst_name = get_gm_instrument_name(prog, channel=ch)
+                custom_name = track_names.get(trk_idx, "")
+                name = custom_name if custom_name else inst_name
+                min_p = min(n.pitch for n in t_notes)
+                max_p = max(n.pitch for n in t_notes)
+                tracks.append(TrackInfo(
+                    track_index=trk_idx,
+                    channel=ch,
+                    name=name,
+                    program=prog,
+                    instrument_name=inst_name,
+                    min_pitch=min_p,
+                    max_pitch=max_p,
+                    note_count=len(t_notes)
+                ))
+        else:
+            tracks.append(TrackInfo(
+                track_index=0,
+                channel=0,
+                name="Acoustic Grand Piano",
+                program=0,
+                instrument_name="Acoustic Grand Piano",
+                min_pitch=48,
+                max_pitch=72,
+                note_count=0
+            ))
 
         # Compute sections: silences of >= 3.0 seconds define section boundaries
         sections = cls._detect_sections(notes, duration)
@@ -328,7 +539,9 @@ class MidiParser:
             notes=notes,
             markers=markers,
             sections=sections,
-            tempo_bpm=initial_bpm
+            tempo_bpm=initial_bpm,
+            tracks=tracks,
+            program_changes=program_changes
         )
 
     @staticmethod
@@ -626,7 +839,8 @@ class ArchiveManager:
                     velocity=n.velocity,
                     start_time=s,
                     end_time=e,
-                    channel=n.channel
+                    channel=n.channel,
+                    track_index=n.track_index
                 ))
 
         MidiParser.write_notes_to_file(sliced_notes, dest_path, tempo_bpm=tempo_bpm, time_offset=start_time)

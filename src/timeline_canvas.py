@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple, Callable
 import cairo
 from gi.repository import Gtk, Gdk, GLib, Adw
 
-from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData
+from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData, TrackInfo, get_track_color, get_gm_instrument_name, get_gm_instrument_icon
 from .player import AudioPlayer
 
 
@@ -70,6 +70,8 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.total_timeline_duration: float = 0.0
         self.total_visual_duration: float = 0.0
         self.px_per_sec: float = self.DEFAULT_PX_PER_SEC
+        self.multi_track_mode: bool = False
+        self.tracks: List[TrackInfo] = []
 
         # Selection state: (start_sec, end_sec) on real timeline
         self.selection_range: Optional[Tuple[float, float]] = None
@@ -140,6 +142,40 @@ class TimelineCanvas(Gtk.DrawingArea):
         scroll.connect("scroll", self._on_scroll)
         self.add_controller(scroll)
 
+    def set_multi_track_mode(self, enabled: bool):
+        if self.multi_track_mode != enabled:
+            self.multi_track_mode = enabled
+            self.queue_draw()
+
+    def get_track_lane_geometries(self, roll_top: float, roll_bottom: float) -> List[Tuple[Optional[TrackInfo], float, float]]:
+        """Compute vertical lane boundaries for each track in multi-track mode."""
+        if not self.tracks or not self.multi_track_mode or len(self.tracks) <= 1:
+            return [(None, roll_top, roll_bottom)]
+
+        total_h = max(10.0, roll_bottom - roll_top)
+        n = len(self.tracks)
+
+        weights = [max(12, t.max_pitch - t.min_pitch + 1) for t in self.tracks]
+        total_w = sum(weights)
+
+        min_lane_h = min(45.0, total_h / n)
+        remaining_h = max(0.0, total_h - (min_lane_h * n))
+
+        lanes = []
+        curr_y = roll_top
+        for i, trk in enumerate(self.tracks):
+            w = weights[i]
+            extra = (w / total_w) * remaining_h if total_w > 0 else 0.0
+            lane_h = min_lane_h + extra
+            if i == n - 1:
+                lane_bottom = roll_bottom
+            else:
+                lane_bottom = curr_y + lane_h
+            lanes.append((trk, curr_y, lane_bottom))
+            curr_y = lane_bottom
+
+        return lanes
+
     def load_sessions(self, sessions: List[SessionRecord]):
         """Build continuous timeline with Silence Compacting spanning all sessions."""
         self.session_items.clear()
@@ -147,6 +183,8 @@ class TimelineCanvas(Gtk.DrawingArea):
 
         all_notes: List[NoteEvent] = []
         all_sections: List[Section] = []
+        all_program_changes: List[Tuple[float, int, int]] = []
+        track_map = {}
 
         for s in sessions:
             item = TimelineSessionItem(s, curr_offset)
@@ -160,7 +198,8 @@ class TimelineCanvas(Gtk.DrawingArea):
                     start_time=n.start_time + curr_offset,
                     end_time=n.end_time + curr_offset,
                     channel=n.channel,
-                    key_end_time=key_end
+                    key_end_time=key_end,
+                    track_index=getattr(n, "track_index", 0)
                 ))
 
             for sec in item.midi_data.sections:
@@ -169,7 +208,35 @@ class TimelineCanvas(Gtk.DrawingArea):
                     end_time=sec.end_time + curr_offset
                 ))
 
-            curr_offset += item.duration + self.INTER_SESSION_GAP
+            for pc in getattr(item.midi_data, "program_changes", []):
+                all_program_changes.append((pc[0] + curr_offset, pc[1], pc[2]))
+
+            for trk in getattr(item.midi_data, "tracks", []):
+                k = (trk.track_index, trk.channel)
+                if k not in track_map:
+                    track_map[k] = TrackInfo(
+                        track_index=trk.track_index,
+                        channel=trk.channel,
+                        name=trk.name,
+                        program=trk.program,
+                        instrument_name=trk.instrument_name,
+                        min_pitch=trk.min_pitch,
+                        max_pitch=trk.max_pitch,
+                        note_count=trk.note_count
+                    )
+                else:
+                    existing = track_map[k]
+                    existing.min_pitch = min(existing.min_pitch, trk.min_pitch)
+                    existing.max_pitch = max(existing.max_pitch, trk.max_pitch)
+                    existing.note_count += trk.note_count
+
+        if track_map:
+            self.tracks = sorted(list(track_map.values()), key=lambda t: (t.track_index, t.channel))
+        else:
+            self.tracks = [TrackInfo(
+                track_index=0, channel=0, name="Acoustic Grand Piano", program=0,
+                instrument_name="Acoustic Grand Piano", min_pitch=48, max_pitch=72, note_count=len(all_notes)
+            )]
 
         self.total_timeline_duration = max(0.5, curr_offset - self.INTER_SESSION_GAP if self.session_items else 0.0)
 
@@ -179,7 +246,9 @@ class TimelineCanvas(Gtk.DrawingArea):
         unified_midi = MidiData(
             duration=self.total_timeline_duration,
             notes=all_notes,
-            sections=all_sections
+            sections=all_sections,
+            tracks=self.tracks,
+            program_changes=all_program_changes
         )
         self.player.load_midi_data(unified_midi)
 
@@ -558,9 +627,44 @@ class TimelineCanvas(Gtk.DrawingArea):
         return min_p, max_p, pitch_range
 
     def _draw_pitch_grid(self, cr: cairo.Context, width: int, roll_top: float, roll_bottom: float, roll_h: float):
+        is_dark = self.is_dark
+        if self.multi_track_mode and len(self.tracks) > 1:
+            lanes = self.get_track_lane_geometries(roll_top, roll_bottom)
+            for trk, lane_top, lane_bottom in lanes:
+                if trk is None:
+                    continue
+                lane_h = max(10.0, lane_bottom - lane_top)
+                pad = max(0, 12 - (trk.max_pitch - trk.min_pitch + 1)) // 2
+                p_min = max(0, trk.min_pitch - 1 - pad)
+                p_max = min(127, trk.max_pitch + 1 + pad)
+                p_span = max(12, p_max - p_min + 1)
+
+                if is_dark:
+                    cr.set_source_rgba(0.28, 0.28, 0.32, 0.85)
+                else:
+                    cr.set_source_rgba(0.78, 0.78, 0.82, 0.85)
+                cr.set_line_width(1.0)
+                cr.move_to(0, lane_bottom)
+                cr.line_to(width, lane_bottom)
+                cr.stroke()
+
+                if p_min <= 60 <= p_max:
+                    norm_c4 = (60 - p_min) / p_span
+                    y_c4 = lane_bottom - (norm_c4 * (lane_h - 10.0)) - 6.0
+                    if is_dark:
+                        cr.set_source_rgba(0.25, 0.65, 0.95, 0.40)
+                    else:
+                        cr.set_source_rgba(0.12, 0.48, 0.85, 0.55)
+                    cr.set_line_width(1.0)
+                    cr.set_dash([4.0, 4.0])
+                    cr.move_to(0, y_c4)
+                    cr.line_to(width, y_c4)
+                    cr.stroke()
+                    cr.set_dash([])
+            return
+
         min_p, max_p, pitch_range = self._get_global_pitch_bounds()
         lane_h = (roll_h - 10.0) / pitch_range
-        is_dark = self.is_dark
 
         for p in range(min_p, max_p + 1):
             norm_p = (p - min_p) / pitch_range
@@ -673,23 +777,34 @@ class TimelineCanvas(Gtk.DrawingArea):
             # Draw Notes & Pedal Tails
             notes = item.midi_data.notes
             if notes:
+                is_multi = self.multi_track_mode and len(self.tracks) > 1
+                lanes = self.get_track_lane_geometries(roll_top, roll_bottom) if is_multi else None
+                lane_map = {(t.track_index, t.channel): (t, top, bottom) for t, top, bottom in (lanes or []) if t is not None} if is_multi else {}
 
                 for n in notes:
                     nx = self.time_to_x(item.timeline_offset + n.start_time)
                     played_end_t = item.timeline_offset + n.played_end_time
                     key_x = self.time_to_x(played_end_t)
                     key_w = max(3.0, key_x - nx)
-
-                    norm_p = (n.pitch - min_p) / pitch_range
-                    ny = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
-
                     vel_ratio = max(0.2, min(1.0, n.velocity / 127.0))
 
-                    # 1. Solid bar: Actual played finger-held note
-                    if is_dark:
-                        cr.set_source_rgba(0.15 * vel_ratio, 0.65 * vel_ratio, 0.95 * vel_ratio, 0.9)
+                    if is_multi and (n.track_index, n.channel) in lane_map:
+                        trk, l_top, l_bot = lane_map[(n.track_index, n.channel)]
+                        l_h = max(10.0, l_bot - l_top)
+                        pad = max(0, 12 - (trk.max_pitch - trk.min_pitch + 1)) // 2
+                        p_min = max(0, trk.min_pitch - 1 - pad)
+                        p_max = min(127, trk.max_pitch + 1 + pad)
+                        p_span = max(12, p_max - p_min + 1)
+                        norm_p = (n.pitch - p_min) / p_span
+                        ny = l_bot - (norm_p * (l_h - 10.0)) - 6.0
+                        base_r, base_g, base_b = get_track_color(program=trk.program, channel=trk.channel)
                     else:
-                        cr.set_source_rgba(0.10 * vel_ratio, 0.45 * vel_ratio, 0.88 * vel_ratio, 0.95)
+                        norm_p = (n.pitch - min_p) / pitch_range
+                        ny = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
+                        base_r, base_g, base_b = (0.15, 0.65, 0.95) if is_dark else (0.10, 0.45, 0.88)
+
+                    # 1. Solid bar: Actual played finger-held note
+                    cr.set_source_rgba(base_r * vel_ratio, base_g * vel_ratio, base_b * vel_ratio, 0.92)
                     cr.rectangle(nx, ny, key_w, 5.0)
                     cr.fill()
 
@@ -699,19 +814,11 @@ class TimelineCanvas(Gtk.DrawingArea):
                         pedal_x = self.time_to_x(pedal_end_t)
                         tail_w = max(2.0, pedal_x - key_x)
 
-                        # Distinct soft sky-blue / lavender pedal color
-                        if is_dark:
-                            cr.set_source_rgba(0.35, 0.85, 0.75, 0.45)
-                        else:
-                            cr.set_source_rgba(0.18, 0.68, 0.60, 0.40)
+                        cr.set_source_rgba(base_r, base_g, base_b, 0.35)
                         cr.rectangle(key_x, ny + 0.5, tail_w, 4.0)
                         cr.fill()
 
-                        # Subtle dashed border for pedal extension
-                        if is_dark:
-                            cr.set_source_rgba(0.4, 0.9, 0.8, 0.8)
-                        else:
-                            cr.set_source_rgba(0.20, 0.75, 0.65, 0.85)
+                        cr.set_source_rgba(base_r, base_g, base_b, 0.8)
                         cr.set_line_width(0.8)
                         cr.set_dash([2.0, 2.0])
                         cr.rectangle(key_x, ny + 0.5, tail_w, 4.0)
@@ -731,6 +838,25 @@ class TimelineCanvas(Gtk.DrawingArea):
 
                 chip_y = roll_top - 14.0 if marker_tier == 0 else roll_top - 28.0
                 self._draw_marker_chip(cr, m.text, mx, chip_y)
+
+        # Instrument Track HUD Watermarks in Multi-Track Mode
+        if self.multi_track_mode and len(self.tracks) > 1:
+            lanes = self.get_track_lane_geometries(roll_top, roll_bottom)
+            cr.save()
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(10.5)
+            for trk, l_top, l_bot in lanes:
+                if trk is None:
+                    continue
+                if is_dark:
+                    cr.set_source_rgba(0.75, 0.75, 0.80, 0.55)
+                else:
+                    cr.set_source_rgba(0.35, 0.35, 0.40, 0.65)
+                icon = get_gm_instrument_icon(trk.program, trk.channel)
+                badge = f"{icon}  {trk.name}"
+                cr.move_to(scroll_x + 14.0, l_top + 16.0)
+                cr.show_text(badge)
+            cr.restore()
 
         # 2. Draw Collapsed Silence Break Folds (// [pause])
         for gap in self.collapsed_gaps:

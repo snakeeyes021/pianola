@@ -48,6 +48,7 @@ class PianolaApplication(Adw.Application):
         self.set_accels_for_action("win.next_day", ['<alt>Right', '<alt>bracketright'])
         self.set_accels_for_action("win.zoom_in", ['<control>plus', '<control>equal'])
         self.set_accels_for_action("win.zoom_out", ['<control>minus'])
+        self.set_accels_for_action("win.toggle_multi_track", ['<control>t'])
 
     def _load_css(self):
         if getattr(self, '_css_loaded', False):

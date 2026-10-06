@@ -211,6 +211,17 @@
                             </style>
                           </object>
                         </child>
+                        <child>
+                          <object class="GtkToggleButton" id="btn_multi_track">
+                            <property name="icon-name">view-list-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Toggle Multi-Track View (Ctrl+T)</property>
+                            <property name="valign">center</property>
+                            <property name="focusable">False</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
 
                       </object>
                     </child>
