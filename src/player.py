@@ -360,6 +360,7 @@ class AudioPlayer:
         self.tracks: list = []
         self.program_changes: list = []
         self._last_applied_prog: dict = {}
+        self.multi_track_mode: bool = False
 
         # Playback transport state
         self.is_playing: bool = False
@@ -381,6 +382,31 @@ class AudioPlayer:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
 
+    def set_multi_track_mode(self, enabled: bool):
+        """Set unified (single instrument / grand piano) or multi-track playback mode."""
+        with self._lock:
+            self.multi_track_mode = enabled
+            self.sync_program_changes()
+
+    def sync_program_changes(self):
+        """Synchronize synth instruments to current playback mode and playhead position."""
+        with self._lock:
+            if not self.multi_track_mode:
+                # Unified single-instrument mode: clamp all channels to GM 0 (Acoustic Grand Piano)
+                for ch in range(16):
+                    self.synth.program_change(ch, 0)
+                self._last_applied_prog = {ch: 0 for ch in range(16)}
+            else:
+                # Multi-track mode: assign each track's instrument to its channel
+                for trk in self.tracks:
+                    self.synth.program_change(trk.channel, trk.program)
+                    self._last_applied_prog[trk.channel] = trk.program
+                # Apply any program changes up to current_time
+                for t, ch, prog in self.program_changes:
+                    if t <= self.current_time:
+                        self.synth.program_change(ch, prog)
+                        self._last_applied_prog[ch] = prog
+
     def load_midi_data(self, midi_data: MidiData):
         """Load notes and sections from parsed MIDI data."""
         with self._lock:
@@ -391,17 +417,16 @@ class AudioPlayer:
             self.tracks = getattr(midi_data, "tracks", [])
             self.program_changes = sorted(getattr(midi_data, "program_changes", []), key=lambda x: x[0])
             self.current_time = 0.0
-
-            # Send initial program changes for each track
-            for trk in self.tracks:
-                self.synth.program_change(trk.channel, trk.program)
-                self._last_applied_prog[trk.channel] = trk.program
+            self.sync_program_changes()
 
     def play(self, from_time: Optional[float] = None):
         """Start or resume playback from specified position or current position."""
         with self._lock:
             if from_time is not None:
                 self.current_time = max(0.0, min(from_time, self.duration))
+            elif self.current_time >= self.duration - 0.05:
+                # Auto-rewind to start if playhead is at or near the end
+                self.current_time = 0.0
 
             if self.is_playing:
                 return
@@ -457,13 +482,17 @@ class AudioPlayer:
             self._start_seek_offset = target_time
             self._silence_all_playback_notes()
 
-            # Apply program changes up to target_time
-            progs = dict(self._last_applied_prog)
-            for t, ch, prog in self.program_changes:
-                if t <= target_time:
-                    progs[ch] = prog
-            for ch, prog in progs.items():
-                self.synth.program_change(ch, prog)
+            # Apply program changes according to playback mode
+            if self.multi_track_mode:
+                progs = dict(self._last_applied_prog)
+                for t, ch, prog in self.program_changes:
+                    if t <= target_time:
+                        progs[ch] = prog
+                for ch, prog in progs.items():
+                    self.synth.program_change(ch, prog)
+            else:
+                for ch in range(16):
+                    self.synth.program_change(ch, 0)
 
         if self.on_tick:
             self.on_tick(self.current_time)
@@ -570,60 +599,69 @@ class AudioPlayer:
 
     def _playback_loop(self):
         tick_interval = 0.010  # 10ms high-precision clock
-        while not self._stop_event.is_set():
-            time.sleep(tick_interval)
-            now = time.monotonic()
+        try:
+            while not self._stop_event.is_set():
+                time.sleep(tick_interval)
+                now = time.monotonic()
 
-            with self._lock:
-                if not self.is_playing:
-                    break
+                with self._lock:
+                    if not self.is_playing:
+                        break
 
-                prev_t = self.current_time
-                elapsed = now - self._start_monotonic
-                self.current_time = self._start_seek_offset + elapsed
+                    prev_t = self.current_time
+                    elapsed = now - self._start_monotonic
+                    self.current_time = self._start_seek_offset + elapsed
 
-                if self.current_time >= self.duration:
-                    self.current_time = self.duration
-                    self.is_playing = False
-                    self._stop_event.set()
-                    self._silence_all_playback_notes()
-                    if self.on_state_changed:
-                        self.on_state_changed(False)
-                    if self.on_tick:
-                        self.on_tick(self.current_time)
-                    break
+                    if self.current_time >= self.duration:
+                        self.current_time = self.duration
+                        self.is_playing = False
+                        self._stop_event.set()
+                        self._silence_all_playback_notes()
+                        if self.on_state_changed:
+                            self.on_state_changed(False)
+                        if self.on_tick:
+                            self.on_tick(self.current_time)
+                        break
 
-                # Dispatch mid-playback program changes
-                for t, ch, prog in self.program_changes:
-                    if prev_t < t <= self.current_time:
-                        self.synth.program_change(ch, prog)
+                    # Dispatch mid-playback program changes only in multi-track mode
+                    if self.multi_track_mode:
+                        for t, ch, prog in self.program_changes:
+                            if prev_t < t <= self.current_time:
+                                self.synth.program_change(ch, prog)
 
-                # Dispatch notes
-                sounding_now: Set[tuple] = set()
-                for n in self.notes:
-                    if n.start_time <= self.current_time <= n.end_time:
-                        sounding_now.add((n.channel, n.pitch))
-
-                # Note offs
-                to_off = self._playing_active - sounding_now
-                for ch, pitch in to_off:
-                    self.synth.note_off(ch, pitch)
-
-                # Note ons
-                to_on = sounding_now - self._playing_active
-                for ch, pitch in to_on:
-                    vel = 100
+                    # Dispatch notes
+                    sounding_now: Set[tuple] = set()
                     for n in self.notes:
-                        if n.channel == ch and n.pitch == pitch and n.start_time <= self.current_time <= n.end_time:
-                            vel = n.velocity
-                            break
-                    self.synth.note_on(ch, pitch, vel)
+                        if n.start_time <= self.current_time <= n.end_time:
+                            sounding_now.add((n.channel, n.pitch))
 
-                self._playing_active = sounding_now
-                curr_t = self.current_time
+                    # Note offs
+                    to_off = self._playing_active - sounding_now
+                    for ch, pitch in to_off:
+                        self.synth.note_off(ch, pitch)
 
-            if self.on_tick:
-                self.on_tick(curr_t)
+                    # Note ons
+                    to_on = sounding_now - self._playing_active
+                    for ch, pitch in to_on:
+                        vel = 100
+                        for n in self.notes:
+                            if n.channel == ch and n.pitch == pitch and n.start_time <= self.current_time <= n.end_time:
+                                vel = n.velocity
+                                break
+                        self.synth.note_on(ch, pitch, vel)
+
+                    self._playing_active = sounding_now
+                    curr_t = self.current_time
+
+                if self.on_tick:
+                    self.on_tick(curr_t)
+        except Exception:
+            with self._lock:
+                self.is_playing = False
+                self._stop_event.set()
+                self._silence_all_playback_notes()
+            if self.on_state_changed:
+                self.on_state_changed(False)
 
     def close(self):
         self.stop()

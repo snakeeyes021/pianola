@@ -7,6 +7,7 @@
 """Main application window for Pianola."""
 
 import os
+import time
 import tempfile
 from datetime import datetime
 from typing import Optional, List
@@ -270,6 +271,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         self.view_stack.set_visible_child_name("timeline")
         self.canvas.load_sessions(sessions)
+        self.player.set_multi_track_mode(self.btn_multi_track.get_active())
 
         # Default start position: beginning of the last session
         self.canvas.jump_to_latest_session()
@@ -283,6 +285,7 @@ class PianolaWindow(Adw.ApplicationWindow):
             session = self.archive_mgr.load_single_file(filepath)
             self.view_stack.set_visible_child_name("timeline")
             self.canvas.load_sessions([session])
+            self.player.set_multi_track_mode(self.btn_multi_track.get_active())
             self.canvas.jump_to_archive_start()
             self.window_title.set_subtitle(os.path.basename(filepath))
         except Exception as e:
@@ -302,6 +305,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     def _on_multi_track_toggled(self, btn):
         active = btn.get_active()
         self.canvas.set_multi_track_mode(active)
+        self.player.set_multi_track_mode(active)
         self.keyboard.queue_draw()
         self.canvas.queue_draw()
 
@@ -378,6 +382,10 @@ class PianolaWindow(Adw.ApplicationWindow):
     def _on_action_play_pause(self, action, param):
         if self.canvas.ctrl_held or self.canvas.scrub_active:
             return
+        now = time.monotonic()
+        if hasattr(self, "_last_play_toggle_time") and now - self._last_play_toggle_time < 0.25:
+            return
+        self._last_play_toggle_time = now
         if not self.player.is_playing:
             # If starting playback and playhead is offscreen, frame it in the viewport
             hadj = self.canvas.hadj

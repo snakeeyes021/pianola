@@ -230,6 +230,8 @@ class TimelineCanvas(Gtk.DrawingArea):
                     existing.max_pitch = max(existing.max_pitch, trk.max_pitch)
                     existing.note_count += trk.note_count
 
+            curr_offset += item.duration + self.INTER_SESSION_GAP
+
         if track_map:
             self.tracks = sorted(list(track_map.values()), key=lambda t: (t.track_index, t.channel))
         else:

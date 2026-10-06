@@ -170,15 +170,27 @@ def test_program_change_dispatch():
     data = MidiData(duration=10.0, notes=notes, tracks=tracks, program_changes=program_changes)
     player.load_midi_data(data)
 
-    # Initial program changes should have been applied for both tracks
-    assert (0, 40) in synth.program_changes_received, "Initial violin program change not received"
-    assert (1, 0) in synth.program_changes_received, "Initial piano program change not received"
+    # In default unified mode, all channels are clamped to Acoustic Grand Piano (program 0)
+    assert (0, 0) in synth.program_changes_received
+    assert (0, 40) not in synth.program_changes_received
+
+    # Enable multi-track mode
+    synth.program_changes_received.clear()
+    player.set_multi_track_mode(True)
+    assert (0, 40) in synth.program_changes_received, "Initial violin program change not received in multi-track mode"
+    assert (1, 0) in synth.program_changes_received, "Initial piano program change not received in multi-track mode"
 
     # Seek to 6.0s (past the program change at 5.0s)
     player.seek(6.0)
     assert (0, 41) in synth.program_changes_received, "Mid-stream program change on seek not received"
 
-    print("  ✓ Passed multi-instrument program change dispatch and seek synchronization.")
+    # Switch back to unified mode
+    synth.program_changes_received.clear()
+    player.set_multi_track_mode(False)
+    assert (0, 0) in synth.program_changes_received
+    assert (1, 0) in synth.program_changes_received
+
+    print("  ✓ Passed unified single-instrument vs multi-track program routing and seek synchronization.")
 
 
 if __name__ == "__main__":
