@@ -49,11 +49,10 @@ class PianolaApplication(Adw.Application):
         self.set_accels_for_action("win.zoom_in", ['<control>plus', '<control>equal'])
         self.set_accels_for_action("win.zoom_out", ['<control>minus'])
 
-    def do_startup(self):
-        super().do_startup()
-        self._load_css()
-
     def _load_css(self):
+        if getattr(self, '_css_loaded', False):
+            return
+        self._css_loaded = True
         provider = Gtk.CssProvider()
         try:
             provider.load_from_resource('/tech/redfoxlabs/Pianola/style.css')
@@ -70,12 +69,14 @@ class PianolaApplication(Adw.Application):
             )
 
     def do_activate(self):
+        self._load_css()
         win = self.props.active_window
         if not win:
             win = PianolaWindow(application=self)
         win.present()
 
     def do_open(self, files, n_files, hint):
+        self._load_css()
         win = self.props.active_window
         if not win:
             win = PianolaWindow(application=self)
