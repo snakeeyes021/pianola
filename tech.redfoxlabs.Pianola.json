@@ -46,7 +46,7 @@
                 {
                     "type": "archive",
                     "url": "https://github.com/FluidSynth/fluidsynth/archive/v2.4.1.tar.gz",
-                    "sha256": "d1e64155ac9048a1c97a2245b63b2164478148b556f0e4fc41fbf16d7a468d6f"
+                    "sha256": "d1e64155ac902116ed3d4dea512719d8c04ab3877db2e8fb160284379f570a2f"
                 }
             ]
         },
@@ -60,7 +60,7 @@
             "sources": [
                 {
                     "type": "archive",
-                    "url": "http://deb.debian.org/debian/pool/main/f/fluid-soundfont/fluid-soundfont_3.1.orig.tar.gz",
+                    "url": "https://deb.debian.org/debian/pool/main/f/fluid-soundfont/fluid-soundfont_3.1.orig.tar.gz",
                     "sha256": "2621acaa1c78e4abdb24bdd163230cc577e61276936d6aa6e3180582142f0343"
                 }
             ]
