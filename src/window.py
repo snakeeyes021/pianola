@@ -64,6 +64,9 @@ class PianolaWindow(Adw.ApplicationWindow):
         # Register window actions
         self._setup_actions()
 
+        # Add hardware-synchronized VSync tick callback
+        self.canvas.add_tick_callback(self._on_ui_tick)
+
         # Auto-discover Midikeep archive on launch
         self.load_archive()
 
@@ -205,6 +208,27 @@ class PianolaWindow(Adw.ApplicationWindow):
             "media-playback-pause-symbolic" if is_playing else "media-playback-start-symbolic"
         ))
 
+    def _on_ui_tick(self, widget, frame_clock):
+        if self.player.is_playing:
+            cur_t = self.player.current_time
+            cur_m, cur_s = int(cur_t // 60), int(cur_t % 60)
+            tot = self.canvas.total_timeline_duration
+            tot_m, tot_s = int(tot // 60), int(tot % 60)
+            self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
+
+            self.canvas.queue_draw()
+
+            # Auto-scroll scrolled_window if playhead near right edge
+            hadj = self.scrolled_window.get_hadjustment()
+            cur_x = self.canvas.time_to_x(cur_t)
+            page_size = hadj.get_page_size()
+            val = hadj.get_value()
+            if cur_x > val + page_size - 100:
+                hadj.set_value(cur_x - 100)
+            elif cur_x < val:
+                hadj.set_value(max(0, cur_x - 50))
+        return GLib.SOURCE_CONTINUE
+
     def _on_player_tick(self, current_time: float):
         def _update():
             # Update time label
@@ -239,6 +263,8 @@ class PianolaWindow(Adw.ApplicationWindow):
             popover.popdown()
 
     def _on_action_play_pause(self, action, param):
+        if self.canvas.ctrl_held or self.canvas.scrub_active:
+            return
         self.player.toggle_play_pause()
 
     def _on_action_play_selection(self, action, param):

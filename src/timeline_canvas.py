@@ -203,8 +203,9 @@ class TimelineCanvas(Gtk.DrawingArea):
         return False
 
     def _on_motion(self, controller, x, y):
-        # If Ctrl held or scrub_active: acoustic scrub at x
-        if self.ctrl_held or self.scrub_active:
+        state = controller.get_current_event_state()
+        is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK) or self.ctrl_held
+        if is_ctrl or self.scrub_active:
             t = self.x_to_time(x)
             self.scrub_active = True
             self.scrub_cursor_time = t

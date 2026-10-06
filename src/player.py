@@ -184,39 +184,76 @@ class NullSynthEngine(BaseSynth):
 
 
 class PulseWaveSynth(BaseSynth):
-    """Real-time wave synthesizer streaming to PulseAudio / PipeWire via paplay/pw-play.
-    Provides immediate audio feedback even when FluidSynth is not installed."""
+    """Ultra-low-latency real-time PCM synthesizer via libpulse-simple (shared memory / socket)."""
 
     def __init__(self):
-        import subprocess, math, struct
+        import ctypes, math, struct
+        self.ctypes = ctypes
         self.math = math
         self.struct = struct
-        self.subprocess = subprocess
         self.rate = 44100
         self.active_notes = {}
         self.lock = threading.Lock()
         self.running = True
-        self.proc = None
+        self.pa = None
         self.is_available = False
-        self._start_proc()
-        if self.proc:
-            self.is_available = True
+
+        self._init_pulse()
+        if self.is_available:
             self.thread = threading.Thread(target=self._audio_loop, daemon=True)
             self.thread.start()
 
-    def _start_proc(self):
-        # Try paplay then pw-play
-        for cmd in [
-            ['paplay', '--raw', '--format=s16le', f'--rate={self.rate}', '--channels=1'],
-            ['pw-play', '--format=s16', f'--rate={self.rate}', '--channels=1', '-']
-        ]:
-            try:
-                self.proc = self.subprocess.Popen(
-                    cmd, stdin=self.subprocess.PIPE, stderr=self.subprocess.DEVNULL
-                )
-                return
-            except Exception:
-                self.proc = None
+    def _init_pulse(self):
+        try:
+            self.lib = self.ctypes.CDLL('libpulse-simple.so.0')
+
+            class SampleSpec(self.ctypes.Structure):
+                _fields_ = [
+                    ('format', self.ctypes.c_int),      # PA_SAMPLE_S16LE = 3
+                    ('rate', self.ctypes.c_uint32),
+                    ('channels', self.ctypes.c_uint8),
+                ]
+
+            class BufferAttr(self.ctypes.Structure):
+                _fields_ = [
+                    ('maxlength', self.ctypes.c_uint32),
+                    ('tlength', self.ctypes.c_uint32),
+                    ('prebuf', self.ctypes.c_uint32),
+                    ('minreq', self.ctypes.c_uint32),
+                    ('fragsize', self.ctypes.c_uint32),
+                ]
+
+            self.lib.pa_simple_new.restype = self.ctypes.c_void_p
+            self.lib.pa_simple_new.argtypes = [
+                self.ctypes.c_char_p, self.ctypes.c_char_p, self.ctypes.c_int,
+                self.ctypes.c_char_p, self.ctypes.c_char_p, self.ctypes.POINTER(SampleSpec),
+                self.ctypes.c_void_p, self.ctypes.POINTER(BufferAttr), self.ctypes.POINTER(self.ctypes.c_int)
+            ]
+            self.lib.pa_simple_write.restype = self.ctypes.c_int
+            self.lib.pa_simple_write.argtypes = [
+                self.ctypes.c_void_p, self.ctypes.c_char_p, self.ctypes.c_size_t, self.ctypes.POINTER(self.ctypes.c_int)
+            ]
+            self.lib.pa_simple_free.argtypes = [self.ctypes.c_void_p]
+
+            ss = SampleSpec(format=3, rate=self.rate, channels=1)
+            # Ultra low-latency target buffer: ~20ms (44100 * 2 bytes * 0.02 = ~1764 bytes)
+            ba = BufferAttr(
+                maxlength=self.ctypes.c_uint32(-1),
+                tlength=int(self.rate * 2 * 0.02),
+                prebuf=self.ctypes.c_uint32(-1),
+                minreq=self.ctypes.c_uint32(-1),
+                fragsize=self.ctypes.c_uint32(-1)
+            )
+
+            err = self.ctypes.c_int(0)
+            self.pa = self.lib.pa_simple_new(
+                None, b'Pianola', 1, None, b'Pianola Playback',
+                self.ctypes.byref(ss), None, self.ctypes.byref(ba), self.ctypes.byref(err)
+            )
+            if self.pa:
+                self.is_available = True
+        except Exception:
+            self.is_available = False
 
     def note_on(self, channel: int, pitch: int, velocity: int):
         with self.lock:
@@ -234,18 +271,18 @@ class PulseWaveSynth(BaseSynth):
             self.active_notes.clear()
 
     def _audio_loop(self):
-        chunk_size = int(self.rate * 0.02)  # 20ms buffer
+        chunk_size = int(self.rate * 0.015)  # 15ms slice
         dt = 1.0 / self.rate
+        err = self.ctypes.c_int(0)
+
         while self.running:
-            if not self.proc or self.proc.poll() is not None:
-                self._start_proc()
-                if not self.proc:
-                    time.sleep(0.05)
-                    continue
+            if not self.pa:
+                time.sleep(0.05)
+                continue
 
             with self.lock:
                 if not self.active_notes:
-                    time.sleep(0.015)
+                    time.sleep(0.01)
                     continue
                 notes_snapshot = list(self.active_notes.values())
 
@@ -266,21 +303,17 @@ class PulseWaveSynth(BaseSynth):
                 samples.append(self.struct.pack('<h', scaled))
 
             data = b''.join(samples)
-            try:
-                self.proc.stdin.write(data)
-                self.proc.stdin.flush()
-            except Exception:
-                self._start_proc()
+            self.lib.pa_simple_write(self.pa, data, len(data), self.ctypes.byref(err))
 
     def close(self):
         self.running = False
         self.all_notes_off()
-        if self.proc:
+        if self.pa:
             try:
-                self.proc.stdin.close()
-                self.proc.terminate()
+                self.lib.pa_simple_free(self.pa)
             except Exception:
                 pass
+            self.pa = None
 
 
 class AudioPlayer:
@@ -343,6 +376,8 @@ class AudioPlayer:
                 return
 
             self.is_playing = True
+            self._start_monotonic = time.monotonic()
+            self._start_seek_offset = self.current_time
             self._stop_event.clear()
             self._thread = threading.Thread(target=self._playback_loop, daemon=True)
             self._thread.start()
@@ -494,20 +529,17 @@ class AudioPlayer:
     # --- Internal Playback Loop ---
 
     def _playback_loop(self):
-        tick_interval = 0.015  # 15ms clock for low latency
-        last_wall_time = time.monotonic()
-
+        tick_interval = 0.010  # 10ms high-precision clock
         while not self._stop_event.is_set():
             time.sleep(tick_interval)
             now = time.monotonic()
-            dt = now - last_wall_time
-            last_wall_time = now
 
             with self._lock:
                 if not self.is_playing:
                     break
 
-                self.current_time += dt
+                elapsed = now - self._start_monotonic
+                self.current_time = self._start_seek_offset + elapsed
 
                 # Silence skipping check during playback
                 if self.skip_silence:
