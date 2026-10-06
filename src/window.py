@@ -31,7 +31,6 @@ class PianolaWindow(Adw.ApplicationWindow):
     lbl_time = Gtk.Template.Child()
     lbl_selection = Gtk.Template.Child()
     btn_play = Gtk.Template.Child()
-    btn_drag_daw = Gtk.Template.Child()
     btn_calendar = Gtk.Template.Child()
     minimap_container = Gtk.Template.Child()
     keyboard_container = Gtk.Template.Child()
@@ -178,25 +177,8 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.btn_calendar.set_popover(popover)
 
     def _setup_drag_source(self):
-        """Enable dragging marquee selection or active file directly into DAWs, Notation, or Nautilus."""
-        # Wire direct drag from timeline selection or session header
+        """Enable dragging marquee selection or active file directly from timeline into DAWs, Notation, or Nautilus."""
         self.canvas.on_request_drag_content = self._create_drag_content_provider
-
-        # Setup drag source on bottom bar draggable pill
-        drag_source = Gtk.DragSource.new()
-        drag_source.set_actions(Gdk.DragAction.COPY)
-        drag_source.connect("prepare", lambda src, x, y: self._create_drag_content_provider())
-        drag_source.connect("drag-begin", self._on_drag_begin)
-        self.btn_drag_daw.add_controller(drag_source)
-
-    def _on_drag_begin(self, drag_source, drag):
-        display = Gdk.Display.get_default()
-        if display:
-            theme = Gtk.IconTheme.get_for_display(display)
-            if theme and theme.has_icon("audio-x-generic-symbolic"):
-                paintable = theme.lookup_icon("audio-x-generic-symbolic", None, 32, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE)
-                if paintable:
-                    drag_source.set_icon(paintable, 16, 16)
 
     def _create_drag_content_provider(self, use_selection: bool = True, target_item = None):
         """Prepare rock-solid MIDI file provider for drag operation supporting GdkFileList, text/uri-list, and text/plain."""

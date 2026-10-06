@@ -52,17 +52,3 @@
   color: @accent_fg_color;
 }
 
-/* Draggable Pill Button in bottom status bar */
-.draggable-pill {
-  cursor: grab;
-  padding: 4px 14px;
-  transition: all 150ms ease;
-}
-
-.draggable-pill:hover {
-  filter: brightness(1.08);
-}
-
-.draggable-pill:active {
-  cursor: grabbing;
-}

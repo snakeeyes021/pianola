@@ -74,6 +74,8 @@ class TimelineCanvas(Gtk.DrawingArea):
         # Selection state: (start_sec, end_sec) on real timeline
         self.selection_range: Optional[Tuple[float, float]] = None
         self._drag_start_time: Optional[float] = None
+        self._drag_target_selection: bool = False
+        self._drag_target_header: Optional[TimelineSessionItem] = None
 
         # Dorico scrub state: Hold Ctrl + Space while moving mouse
         self.ctrl_held: bool = False
@@ -112,6 +114,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         canvas_drag.set_actions(Gdk.DragAction.COPY)
         canvas_drag.connect("prepare", self._on_canvas_drag_prepare)
         canvas_drag.connect("drag-begin", self._on_canvas_drag_begin)
+        canvas_drag.connect("drag-end", self._on_canvas_drag_end)
         self.add_controller(canvas_drag)
 
         # Drag gesture for marquee selection
@@ -326,22 +329,14 @@ class TimelineCanvas(Gtk.DrawingArea):
         return False
 
     def _on_canvas_drag_prepare(self, drag_source, x, y):
-        world_x = x + self.hadj.get_value()
-        t = self.x_to_time(world_x)
+        # External drag is ONLY permitted if mouse down was initiated on an already committed selection or header
+        if self._drag_target_selection and self.selection_range:
+            if self.on_request_drag_content:
+                return self.on_request_drag_content(use_selection=True)
 
-        # 1. Inside active selection: drag slice
-        if self.selection_range:
-            s_start, s_end = self.selection_range
-            if s_start <= t <= s_end and y > self.HEADER_HEIGHT:
-                if self.on_request_drag_content:
-                    return self.on_request_drag_content(use_selection=True)
-
-        # 2. Header bar: drag session take
-        if y <= self.HEADER_HEIGHT:
-            for item in self.session_items:
-                if item.timeline_offset <= t <= item.end_timeline_offset:
-                    if self.on_request_drag_content:
-                        return self.on_request_drag_content(use_selection=False, target_item=item)
+        if self._drag_target_header:
+            if self.on_request_drag_content:
+                return self.on_request_drag_content(use_selection=False, target_item=self._drag_target_header)
 
         return None
 
@@ -353,6 +348,10 @@ class TimelineCanvas(Gtk.DrawingArea):
                 paintable = theme.lookup_icon("audio-x-generic-symbolic", None, 32, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE)
                 if paintable:
                     drag_source.set_icon(paintable, 16, 16)
+
+    def _on_canvas_drag_end(self, drag_source, drag, delete_data):
+        self._drag_target_selection = False
+        self._drag_target_header = None
 
     def _on_motion(self, controller, x, y):
         world_x = x + self.hadj.get_value()
@@ -393,7 +392,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         world_x = x + self.hadj.get_value()
         t = self.x_to_time(world_x)
 
-        # Header area: check stars and marker chips
+        self._drag_target_selection = False
+        self._drag_target_header = None
+
+        # 1. Header area: check stars and marker chips
         if y <= self.HEADER_HEIGHT:
             for item in self.session_items:
                 item_x = self.time_to_x(item.timeline_offset)
@@ -412,33 +414,45 @@ class TimelineCanvas(Gtk.DrawingArea):
                         self.queue_draw()
                         return
 
+            for item in self.session_items:
+                if item.timeline_offset <= t <= item.end_timeline_offset:
+                    self._drag_target_header = item
+                    break
+            return
+
+        # 2. Main timeline: check if click lands inside an existing committed selection
         state = gesture.get_current_event_state()
         is_inside_selection = False
-        if self.selection_range:
+        if self.selection_range and y > self.HEADER_HEIGHT:
             s_start, s_end = self.selection_range
-            if s_start <= t <= s_end and y > self.HEADER_HEIGHT:
+            if s_start <= t <= s_end:
                 is_inside_selection = True
 
-        if not is_inside_selection and not (state & Gdk.ModifierType.SHIFT_MASK):
-            self.selection_range = None
-            if self.on_selection_changed:
-                self.on_selection_changed(None)
+        if is_inside_selection:
+            # Targeted existing selection for external drag or seek
+            self._drag_target_selection = True
+            self.player.seek(t)
+            self.queue_draw()
+        else:
+            # Clicked outside: clear selection unless Shift is held
+            if not (state & Gdk.ModifierType.SHIFT_MASK):
+                self.selection_range = None
+                if self.on_selection_changed:
+                    self.on_selection_changed(None)
 
-        self.player.seek(t)
-        self.queue_draw()
+            self.player.seek(t)
+            self.queue_draw()
 
     def _on_drag_begin(self, gesture, start_x, start_y):
-        world_start_x = start_x + self.hadj.get_value()
-        t = self.x_to_time(world_start_x)
+        # If user clicked on an existing selection or header, do NOT start a marquee selection
+        if self._drag_target_selection or self._drag_target_header:
+            self._drag_start_time = None
+            return
         if start_y <= self.HEADER_HEIGHT:
             self._drag_start_time = None
             return
-        if self.selection_range:
-            s_start, s_end = self.selection_range
-            if s_start <= t <= s_end:
-                self._drag_start_time = None
-                return
-        self._drag_start_time = t
+        world_start_x = start_x + self.hadj.get_value()
+        self._drag_start_time = self.x_to_time(world_start_x)
 
     def _on_drag_update(self, gesture, offset_x, offset_y):
         if self._drag_start_time is None:
@@ -460,6 +474,8 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _on_drag_end(self, gesture, offset_x, offset_y):
         self._drag_start_time = None
+        self._drag_target_selection = False
+        self._drag_target_header = None
 
     def _on_scroll(self, controller, dx, dy):
         state = controller.get_current_event_state()
