@@ -269,11 +269,14 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.player.toggle_play_pause()
 
     def _on_action_play_selection(self, action, param):
-        if self.canvas.selection_range:
-            start_t = self.canvas.selection_range[0]
-            self.player.play(from_time=start_t)
+        if self.player.is_playing:
+            self.player.pause()
         else:
-            self.player.play()
+            if self.canvas.selection_range:
+                start_t = self.canvas.selection_range[0]
+                self.player.play(from_time=start_t)
+            else:
+                self.player.play()
 
     def scroll_to_time(self, t: float):
         """Scroll the viewport so time t is centered in view."""

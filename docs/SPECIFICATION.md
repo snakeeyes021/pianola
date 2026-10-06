@@ -38,6 +38,10 @@ Pianola (`tech.redfoxlabs.Pianola`) is a modern, lightweight, HIG-compliant GNOM
 
 ---
 
+### 1.5 Piano Roll Pitch Guide & Middle C (C4)
+* A vertical piano keyboard gutter / ruler on the pitch axis with white/black key markers.
+* Explicit pitch guide highlighting **Middle C (C4 / MIDI note 60)** across the canvas.
+
 ## 2. Midikeep Storage & Journaling Integration
 
 * **Data Directory:** `~/.local/share/midikeep/` (or `$XDG_DATA_HOME/midikeep`)
