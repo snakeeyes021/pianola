@@ -19,6 +19,7 @@ import sys
 import time
 import glob
 import ctypes
+import ctypes.util
 import threading
 from typing import List, Optional, Set, Callable
 from dataclasses import dataclass
@@ -68,7 +69,10 @@ class FluidSynthEngine(BaseSynth):
 
     def _init_fluid(self, soundfont_path: Optional[str]):
         # Search for libfluidsynth
-        libname = ctypes.util.find_library("fluidsynth") or "libfluidsynth.so.3"
+        try:
+            libname = ctypes.util.find_library("fluidsynth") or "libfluidsynth.so.3"
+        except Exception:
+            libname = "libfluidsynth.so.3"
         try:
             self._lib = ctypes.CDLL(libname)
         except OSError:
