@@ -31,6 +31,7 @@ pianola_sources = [
   'main.py',
   'window.py',
   'archive.py',
+  'player.py',
 ]
 
 install_data(pianola_sources, install_dir: moduledir)
