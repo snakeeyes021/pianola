@@ -44,6 +44,8 @@ class PianolaApplication(Adw.Application):
         self.set_accels_for_action("win.play_selection", ['p'])
         self.set_accels_for_action("win.prev_section", ['bracketleft'])
         self.set_accels_for_action("win.next_section", ['bracketright'])
+        self.set_accels_for_action("win.prev_day", ['<alt>Left', '<alt>bracketleft'])
+        self.set_accels_for_action("win.next_day", ['<alt>Right', '<alt>bracketright'])
         self.set_accels_for_action("win.zoom_in", ['<control>plus', '<control>equal'])
         self.set_accels_for_action("win.zoom_out", ['<control>minus'])
 

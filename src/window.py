@@ -34,8 +34,8 @@ class PianolaWindow(Adw.ApplicationWindow):
     btn_calendar = Gtk.Template.Child()
     minimap_container = Gtk.Template.Child()
     keyboard_container = Gtk.Template.Child()
-    btn_prev_take = Gtk.Template.Child()
-    btn_next_take = Gtk.Template.Child()
+    btn_prev_day = Gtk.Template.Child()
+    btn_next_day = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -54,8 +54,8 @@ class PianolaWindow(Adw.ApplicationWindow):
         # Setup Overview Minimap
         self.minimap = OverviewMinimap(self.canvas, self.player)
         self.minimap_container.append(self.minimap)
-        self.btn_prev_take.connect("clicked", self._on_prev_take_clicked)
-        self.btn_next_take.connect("clicked", self._on_next_take_clicked)
+        self.btn_prev_day.connect("clicked", self._on_prev_day_clicked)
+        self.btn_next_day.connect("clicked", self._on_next_day_clicked)
 
         # Setup Visual Piano Keyboard Gutter
         self.keyboard = PianoKeyboardGutter(self.canvas, self.player)
@@ -90,6 +90,8 @@ class PianolaWindow(Adw.ApplicationWindow):
             ("play_selection", self._on_action_play_selection),
             ("prev_section", self._on_action_prev_section),
             ("next_section", self._on_action_next_section),
+            ("prev_day", lambda *_: self._on_prev_day_clicked(None)),
+            ("next_day", lambda *_: self._on_next_day_clicked(None)),
             ("zoom_in", lambda *_: self.canvas.zoom_in()),
             ("zoom_out", lambda *_: self.canvas.zoom_out()),
         ]
@@ -300,37 +302,56 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.canvas.queue_draw()
         self.minimap.queue_draw()
 
-    def _on_prev_take_clicked(self, btn):
+    def _on_prev_day_clicked(self, btn):
+        if not self.canvas.session_items:
+            return
         curr_t = self.player.current_time
-        target = None
-        for item in reversed(self.canvas.session_items):
-            if item.timeline_offset < curr_t - 0.5:
-                target = item
+        curr_item = self.canvas.session_items[0]
+        for item in self.canvas.session_items:
+            if item.timeline_offset <= curr_t + 0.1:
+                curr_item = item
+            else:
                 break
-        if target:
-            self.player.seek(target.timeline_offset)
-            self.scroll_to_time(target.timeline_offset)
-        elif self.canvas.session_items:
+        curr_date = curr_item.session.start_time.date()
+
+        all_days = sorted(list({item.session.start_time.date() for item in self.canvas.session_items}))
+        prev_days = [d for d in all_days if d < curr_date]
+        if prev_days:
+            target_day = prev_days[-1]
+            target_item = next(it for it in self.canvas.session_items if it.session.start_time.date() == target_day)
+            self.player.seek(target_item.timeline_offset)
+            self.scroll_to_time(target_item.timeline_offset)
+        else:
             first = self.canvas.session_items[0]
             self.player.seek(first.timeline_offset)
             self.scroll_to_time(first.timeline_offset)
         self.minimap.queue_draw()
 
-    def _on_next_take_clicked(self, btn):
+    def _on_next_day_clicked(self, btn):
+        if not self.canvas.session_items:
+            return
         curr_t = self.player.current_time
-        target = None
+        curr_item = self.canvas.session_items[0]
         for item in self.canvas.session_items:
-            if item.timeline_offset > curr_t + 0.5:
-                target = item
+            if item.timeline_offset <= curr_t + 0.1:
+                curr_item = item
+            else:
                 break
-        if target:
-            self.player.seek(target.timeline_offset)
-            self.scroll_to_time(target.timeline_offset)
-        elif self.canvas.session_items:
+        curr_date = curr_item.session.start_time.date()
+
+        all_days = sorted(list({item.session.start_time.date() for item in self.canvas.session_items}))
+        next_days = [d for d in all_days if d > curr_date]
+        if next_days:
+            target_day = next_days[0]
+            target_item = next(it for it in self.canvas.session_items if it.session.start_time.date() == target_day)
+            self.player.seek(target_item.timeline_offset)
+            self.scroll_to_time(target_item.timeline_offset)
+        else:
             last = self.canvas.session_items[-1]
             self.player.seek(last.timeline_offset)
             self.scroll_to_time(last.timeline_offset)
         self.minimap.queue_draw()
+
 
     def _on_action_prev_section(self, action, param):
         t = self.player.jump_prev_section()

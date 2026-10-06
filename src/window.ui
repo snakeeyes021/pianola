@@ -131,9 +131,9 @@
                         <property name="margin-top">4</property>
                         <property name="margin-bottom">4</property>
                         <child>
-                          <object class="GtkButton" id="btn_prev_take">
+                          <object class="GtkButton" id="btn_prev_day">
                             <property name="icon-name">go-previous-symbolic</property>
-                            <property name="tooltip-text" translatable="yes">Jump to Previous Take</property>
+                            <property name="tooltip-text" translatable="yes">Jump to Previous Day</property>
                             <style>
                               <class name="flat"/>
                             </style>
@@ -148,9 +148,9 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="btn_next_take">
+                          <object class="GtkButton" id="btn_next_day">
                             <property name="icon-name">go-next-symbolic</property>
-                            <property name="tooltip-text" translatable="yes">Jump to Next Take</property>
+                            <property name="tooltip-text" translatable="yes">Jump to Next Day</property>
                             <style>
                               <class name="flat"/>
                             </style>
