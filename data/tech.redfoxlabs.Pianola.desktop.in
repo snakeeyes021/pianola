@@ -1,10 +1,13 @@
 [Desktop Entry]
 Name=Pianola
-Exec=pianola
+GenericName=MIDI Timeline Browser
+Comment=Preview, scrub, and timeline-browse MIDI recordings
+Exec=pianola %U
 Icon=tech.redfoxlabs.Pianola
 Terminal=false
 Type=Application
-Categories=Utility;
-Keywords=GTK;
+Categories=GNOME;GTK;AudioVideo;Audio;Midi;
+Keywords=MIDI;Timeline;Audio;Player;Scrub;Synthesizer;Music;Midikeep;Pianola;
+MimeType=audio/midi;audio/x-midi;
 StartupNotify=true
 DBusActivatable=true
