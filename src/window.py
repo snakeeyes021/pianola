@@ -179,9 +179,13 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def _setup_drag_source(self):
         """Enable dragging marquee selection or active file directly into DAWs, Notation, or Nautilus."""
+        # Wire direct drag from timeline selection or session header
+        self.canvas.on_request_drag_content = self._create_drag_content_provider
+
+        # Setup drag source on bottom bar draggable pill
         drag_source = Gtk.DragSource.new()
         drag_source.set_actions(Gdk.DragAction.COPY)
-        drag_source.connect("prepare", self._on_drag_prepare)
+        drag_source.connect("prepare", lambda src, x, y: self._create_drag_content_provider())
         drag_source.connect("drag-begin", self._on_drag_begin)
         self.btn_drag_daw.add_controller(drag_source)
 
@@ -194,22 +198,16 @@ class PianolaWindow(Adw.ApplicationWindow):
                 if paintable:
                     drag_source.set_icon(paintable, 16, 16)
 
-    def _on_drag_prepare(self, drag_source, x, y):
-        """Prepare MIDI file provider for drag operation supporting text/uri-list and GdkFileList."""
+    def _create_drag_content_provider(self, use_selection: bool = True, target_item = None):
+        """Prepare rock-solid MIDI file provider for drag operation supporting GdkFileList, text/uri-list, and text/plain."""
         if not self.canvas.session_items:
             return None
 
-        # Use host-accessible export directory (~/.local/share/midikeep/export) so Flatpak-to-host drop succeeds
-        export_dir = os.path.join(self.archive_mgr.root_dir, "export")
-        try:
-            os.makedirs(export_dir, exist_ok=True)
-        except Exception:
-            export_dir = tempfile.gettempdir()
-
+        export_dir = self.archive_mgr.export_dir
         sel = self.canvas.selection_range
         final_path = None
 
-        if sel:
+        if use_selection and sel:
             # Marquee slice export
             s_start, s_end = sel
             final_path = os.path.join(export_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s.mid")
@@ -225,20 +223,19 @@ class PianolaWindow(Adw.ApplicationWindow):
                     ))
             self.archive_mgr.export_slice(all_notes, s_start, s_end, final_path)
         else:
-            # Session under active playhead / viewport
-            curr_t = self.player.current_time
-            target_item = self.canvas.session_items[0]
-            for item in self.canvas.session_items:
-                if item.timeline_offset <= curr_t <= item.end_timeline_offset:
-                    target_item = item
-                    break
-                elif item.timeline_offset <= curr_t:
-                    target_item = item
+            if not target_item:
+                curr_t = self.player.current_time
+                target_item = self.canvas.session_items[0]
+                for item in self.canvas.session_items:
+                    if item.timeline_offset <= curr_t <= item.end_timeline_offset:
+                        target_item = item
+                        break
+                    elif item.timeline_offset <= curr_t:
+                        target_item = item
 
             if target_item.session.file_path and os.path.exists(target_item.session.file_path):
                 final_path = target_item.session.file_path
             else:
-                # Live recording or memory-only session
                 final_path = os.path.join(export_dir, f"Pianola_Take_{int(target_item.timeline_offset)}s.mid")
                 all_notes = [NoteEvent(
                     pitch=n.pitch,
@@ -252,18 +249,22 @@ class PianolaWindow(Adw.ApplicationWindow):
         if not final_path or not os.path.exists(final_path):
             return None
 
-        # Build dual ContentProvider: GdkFileList for GTK file managers + text/uri-list for DAWs and Wine
-        gfile = Gio.File.new_for_path(final_path)
-        uri_payload = (gfile.get_uri() + chr(13) + chr(10)).encode("utf-8")
-        p_uri = Gdk.ContentProvider.new_for_bytes("text/uri-list", GLib.Bytes.new(uri_payload))
+        # Build multi-format provider: GdkFileList for Nautilus, text/uri-list and text/plain for DAWs and Wine/Dorico
+        gfile = Gio.File.new_for_path(os.path.abspath(final_path))
+        uri = gfile.get_uri()
+        uri_payload = (uri + chr(13) + chr(10)).encode("utf-8")
 
+        providers = []
         if hasattr(Gdk, "FileList"):
-            file_list = Gdk.FileList.new_from_list([gfile])
-            p_files = Gdk.ContentProvider.new_for_value(file_list)
-            return Gdk.ContentProvider.new_union([p_files, p_uri])
+            providers.append(Gdk.ContentProvider.new_for_value(Gdk.FileList.new_from_list([gfile])))
         else:
-            p_file = Gdk.ContentProvider.new_for_value(gfile)
-            return Gdk.ContentProvider.new_union([p_file, p_uri])
+            providers.append(Gdk.ContentProvider.new_for_value(gfile))
+
+        providers.append(Gdk.ContentProvider.new_for_bytes("text/uri-list", GLib.Bytes.new(uri_payload)))
+        providers.append(Gdk.ContentProvider.new_for_bytes("text/plain", GLib.Bytes.new(uri_payload)))
+        providers.append(Gdk.ContentProvider.new_for_bytes("text/plain;charset=utf-8", GLib.Bytes.new(uri_payload)))
+
+        return Gdk.ContentProvider.new_union(providers)
 
     def load_archive(self):
         """Default launch: check ~/.local/share/midikeep/index.db."""

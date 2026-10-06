@@ -18,6 +18,7 @@ import io
 import struct
 import sqlite3
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any
@@ -453,9 +454,32 @@ class ArchiveManager:
 
     def __init__(self, data_dir: Optional[str] = None):
         self.data_dir = data_dir or get_midikeep_dir()
+        self.root_dir = self.data_dir
         self.db_path = os.path.join(self.data_dir, "index.db")
         self.journal_dir = os.path.join(self.data_dir, "journal")
         self.sessions_dir = os.path.join(self.data_dir, "sessions")
+
+    @property
+    def export_dir(self) -> str:
+        """Host-accessible directory for exported MIDI slices and drag-and-drop files."""
+        from gi.repository import GLib
+        candidates = [
+            os.path.join(self.data_dir, "export"),
+            os.path.join(GLib.get_user_cache_dir(), "pianola", "export"),
+            os.path.join(GLib.get_user_data_dir(), "pianola", "export"),
+            os.path.join(tempfile.gettempdir(), "pianola_export")
+        ]
+        for c in candidates:
+            try:
+                os.makedirs(c, exist_ok=True)
+                test_f = os.path.join(c, ".writable_test")
+                with open(test_f, "w") as f:
+                    f.write("ok")
+                os.remove(test_f)
+                return c
+            except Exception:
+                continue
+        return tempfile.gettempdir()
 
     def archive_exists(self) -> bool:
         """True if Midikeep index.db exists."""

@@ -11,7 +11,8 @@
         "--device=dri",
         "--socket=wayland",
         "--socket=pulseaudio",
-        "--filesystem=xdg-data/midikeep:rw",
+        "--filesystem=xdg-data/midikeep:create",
+        "--filesystem=xdg-cache/pianola:create",
         "--filesystem=home:ro"
     ],
     "cleanup": [

@@ -85,6 +85,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         # Callbacks
         self.on_star_toggled: Optional[Callable[[SessionRecord, bool], None]] = None
         self.on_selection_changed: Optional[Callable[[Optional[Tuple[float, float]]], None]] = None
+        self.on_request_drag_content: Optional[Callable[..., Any]] = None
 
         # Configuration
         self.hadj = Gtk.Adjustment.new(0.0, 0.0, 1000.0, 25.0, 200.0, 800.0)
@@ -105,6 +106,13 @@ class TimelineCanvas(Gtk.DrawingArea):
         motion.connect("motion", self._on_motion)
         motion.connect("leave", self._on_motion_leave)
         self.add_controller(motion)
+
+        # Drag source for dragging selection slice or session take directly to external apps
+        canvas_drag = Gtk.DragSource.new()
+        canvas_drag.set_actions(Gdk.DragAction.COPY)
+        canvas_drag.connect("prepare", self._on_canvas_drag_prepare)
+        canvas_drag.connect("drag-begin", self._on_canvas_drag_begin)
+        self.add_controller(canvas_drag)
 
         # Drag gesture for marquee selection
         drag = Gtk.GestureDrag.new()
@@ -317,16 +325,63 @@ class TimelineCanvas(Gtk.DrawingArea):
 
         return False
 
+    def _on_canvas_drag_prepare(self, drag_source, x, y):
+        world_x = x + self.hadj.get_value()
+        t = self.x_to_time(world_x)
+
+        # 1. Inside active selection: drag slice
+        if self.selection_range:
+            s_start, s_end = self.selection_range
+            if s_start <= t <= s_end and y > self.HEADER_HEIGHT:
+                if self.on_request_drag_content:
+                    return self.on_request_drag_content(use_selection=True)
+
+        # 2. Header bar: drag session take
+        if y <= self.HEADER_HEIGHT:
+            for item in self.session_items:
+                if item.timeline_offset <= t <= item.end_timeline_offset:
+                    if self.on_request_drag_content:
+                        return self.on_request_drag_content(use_selection=False, target_item=item)
+
+        return None
+
+    def _on_canvas_drag_begin(self, drag_source, drag):
+        display = Gdk.Display.get_default()
+        if display:
+            theme = Gtk.IconTheme.get_for_display(display)
+            if theme and theme.has_icon("audio-x-generic-symbolic"):
+                paintable = theme.lookup_icon("audio-x-generic-symbolic", None, 32, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE)
+                if paintable:
+                    drag_source.set_icon(paintable, 16, 16)
+
     def _on_motion(self, controller, x, y):
         world_x = x + self.hadj.get_value()
         t = self.x_to_time(world_x)
         self.hover_mouse_time = t
+
+        is_grabbable = False
+        if self.selection_range:
+            s_start, s_end = self.selection_range
+            if s_start <= t <= s_end and y > self.HEADER_HEIGHT:
+                is_grabbable = True
+        elif y <= self.HEADER_HEIGHT:
+            for item in self.session_items:
+                if item.timeline_offset <= t <= item.end_timeline_offset:
+                    is_grabbable = True
+                    break
+
+        if is_grabbable:
+            self.set_cursor_from_name("grab")
+        else:
+            self.set_cursor_from_name("default")
+
         if self.scrub_active:
             self.scrub_cursor_time = t
             self.player.audit_at(t)
             self.queue_draw()
 
     def _on_motion_leave(self, controller):
+        self.set_cursor_from_name("default")
         if self.scrub_active:
             self.scrub_active = False
             self.scrub_cursor_time = None
@@ -358,7 +413,13 @@ class TimelineCanvas(Gtk.DrawingArea):
                         return
 
         state = gesture.get_current_event_state()
-        if not (state & Gdk.ModifierType.SHIFT_MASK):
+        is_inside_selection = False
+        if self.selection_range:
+            s_start, s_end = self.selection_range
+            if s_start <= t <= s_end and y > self.HEADER_HEIGHT:
+                is_inside_selection = True
+
+        if not is_inside_selection and not (state & Gdk.ModifierType.SHIFT_MASK):
             self.selection_range = None
             if self.on_selection_changed:
                 self.on_selection_changed(None)
@@ -368,7 +429,16 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _on_drag_begin(self, gesture, start_x, start_y):
         world_start_x = start_x + self.hadj.get_value()
-        self._drag_start_time = self.x_to_time(world_start_x)
+        t = self.x_to_time(world_start_x)
+        if start_y <= self.HEADER_HEIGHT:
+            self._drag_start_time = None
+            return
+        if self.selection_range:
+            s_start, s_end = self.selection_range
+            if s_start <= t <= s_end:
+                self._drag_start_time = None
+                return
+        self._drag_start_time = t
 
     def _on_drag_update(self, gesture, offset_x, offset_y):
         if self._drag_start_time is None:
