@@ -74,10 +74,6 @@ class OverviewMinimap(Gtk.DrawingArea):
             self.hadj.set_value(target_canvas_x)
             self._drag_start_hadj_val = target_canvas_x
 
-            # Seek playback to the clicked timeline position
-            if self.canvas.total_timeline_duration > 0:
-                clicked_t = (start_x / width) * self.canvas.total_timeline_duration
-                self.player.seek(clicked_t)
         else:
             # User clicked directly inside the lens; grab and drag smoothly from current position
             self._drag_start_hadj_val = self.hadj.get_value()

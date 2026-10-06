@@ -237,15 +237,19 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.canvas.queue_draw()
             self.minimap.queue_draw()
 
-            # Auto-scroll canvas viewport if playhead approaches right edge (when user is not dragging)
+            # Auto-scroll canvas viewport if playhead approaches right edge
+            # Only auto-scroll when user is not actively dragging and playhead is on-screen
             if not self.minimap.is_dragging and not self.canvas._drag_start_time:
                 hadj = self.canvas.hadj
                 cur_x = self.canvas.time_to_x(cur_t)
                 page_size = hadj.get_page_size()
                 val = hadj.get_value()
                 max_val = max(0.0, hadj.get_upper() - page_size)
-                if cur_x > val + page_size - 80:
-                    hadj.set_value(min(max_val, cur_x - 80))
+                # Only follow forward if the playhead is currently inside the visible viewport;
+                # if user manually scrolled away to inspect another section, do not yank them back.
+                if val <= cur_x <= val + page_size:
+                    if cur_x > val + page_size - 80:
+                        hadj.set_value(min(max_val, cur_x - 80))
         return GLib.SOURCE_CONTINUE
 
     def _on_player_tick(self, current_time: float):
@@ -275,6 +279,14 @@ class PianolaWindow(Adw.ApplicationWindow):
     def _on_action_play_pause(self, action, param):
         if self.canvas.ctrl_held or self.canvas.scrub_active:
             return
+        if not self.player.is_playing:
+            # If starting playback and playhead is offscreen, frame it in the viewport
+            hadj = self.canvas.hadj
+            cur_x = self.canvas.time_to_x(self.player.current_time)
+            val = hadj.get_value()
+            page_size = hadj.get_page_size()
+            if cur_x < val or cur_x > val + page_size:
+                self.scroll_to_time(self.player.current_time)
         self.player.toggle_play_pause()
 
     def _on_action_play_selection(self, action, param):
@@ -283,8 +295,10 @@ class PianolaWindow(Adw.ApplicationWindow):
         else:
             if self.canvas.selection_range:
                 start_t = self.canvas.selection_range[0]
+                self.scroll_to_time(start_t)
                 self.player.play(from_time=start_t)
             else:
+                self.scroll_to_time(self.player.current_time)
                 self.player.play()
 
     def scroll_to_time(self, t: float):
