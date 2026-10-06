@@ -337,7 +337,6 @@ class AudioPlayer:
         # Playback transport state
         self.is_playing: bool = False
         self.current_time: float = 0.0
-        self.skip_silence: bool = False
 
         # Active sounding notes during normal playback
         self._playing_active: Set[tuple] = set()
@@ -539,17 +538,6 @@ class AudioPlayer:
 
                 elapsed = now - self._start_monotonic
                 self.current_time = self._start_seek_offset + elapsed
-
-                # Silence skipping check during playback
-                if self.skip_silence:
-                    # Check if any note is currently active
-                    is_active = any(n.start_time <= self.current_time <= n.end_time for n in self.notes)
-                    if not is_active:
-                        # We are in silence. Find next note
-                        next_note = next((n for n in self.notes if n.start_time > self.current_time), None)
-                        if next_note and (next_note.start_time - self.current_time) >= 1.0:
-                            self.current_time = next_note.start_time
-
 
                 if self.current_time >= self.duration:
                     self.current_time = self.duration

@@ -30,7 +30,6 @@ class PianolaWindow(Adw.ApplicationWindow):
     lbl_time = Gtk.Template.Child()
     lbl_selection = Gtk.Template.Child()
     btn_play = Gtk.Template.Child()
-    btn_skip_silence = Gtk.Template.Child()
     btn_drag_daw = Gtk.Template.Child()
     btn_calendar = Gtk.Template.Child()
     minimap_container = Gtk.Template.Child()
@@ -73,7 +72,6 @@ class PianolaWindow(Adw.ApplicationWindow):
         self._setup_drag_source()
 
         # Connect UI toggles
-        self.btn_skip_silence.connect("toggled", self._on_skip_silence_toggled)
 
         # Register window actions
         self._setup_actions()
@@ -209,9 +207,6 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.lbl_selection.set_text(f"Selected: {m1:02d}:{s_1:02d} – {m2:02d}:{s_2:02d} ({dur:.1f}s)")
         else:
             self.lbl_selection.set_text("No selection")
-
-    def _on_skip_silence_toggled(self, button):
-        self.player.skip_silence = button.get_active()
 
     def _on_player_state_changed(self, is_playing: bool):
         GLib.idle_add(lambda: self.btn_play.set_icon_name(

@@ -102,12 +102,6 @@
                 <property name="action-name">win.zoom_out</property>
               </object>
             </child>
-            <child type="end">
-              <object class="GtkToggleButton" id="btn_skip_silence">
-                <property name="icon-name">media-seek-forward-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Skip Silence (Toggle)</property>
-              </object>
-            </child>
           </object>
         </child>
 
