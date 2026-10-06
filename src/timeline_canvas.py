@@ -87,17 +87,17 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.on_selection_changed: Optional[Callable[[Optional[Tuple[float, float]]], None]] = None
 
         # Configuration
+        self.hadj = Gtk.Adjustment.new(0.0, 0.0, 1000.0, 25.0, 200.0, 800.0)
+        self.hadj.connect("value-changed", lambda *_: self.queue_draw())
+
         self.set_hexpand(True)
         self.set_vexpand(True)
         self.set_focusable(True)
+        self.set_content_width(800)
+        self.set_content_height(320)
         self.set_draw_func(self._on_draw)
 
         self._setup_event_controllers()
-
-    def do_snapshot(self, snapshot):
-        if self.get_width() <= 0 or self.get_height() <= 0:
-            return
-        super().do_snapshot(snapshot)
 
     def _setup_event_controllers(self):
         # Motion controller
@@ -254,9 +254,10 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _update_dimensions(self):
         vis_dur = self.total_visual_duration if self.total_visual_duration > 0 else self.total_timeline_duration
-        width = int(math.ceil(vis_dur * self.px_per_sec)) + 120
-        self.set_content_width(max(800, width))
-        self.set_content_height(320)
+        total_w = max(800.0, (vis_dur * self.px_per_sec) + 120.0)
+        self.hadj.set_upper(total_w)
+        viewport_w = float(self.get_width() or 800.0)
+        self.hadj.set_page_size(viewport_w)
 
     def set_zoom(self, px_per_sec: float):
         self.px_per_sec = max(self.MIN_PX_PER_SEC, min(self.MAX_PX_PER_SEC, px_per_sec))
@@ -317,7 +318,8 @@ class TimelineCanvas(Gtk.DrawingArea):
         return False
 
     def _on_motion(self, controller, x, y):
-        t = self.x_to_time(x)
+        world_x = x + self.hadj.get_value()
+        t = self.x_to_time(world_x)
         self.hover_mouse_time = t
         if self.scrub_active:
             self.scrub_cursor_time = t
@@ -333,13 +335,14 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _on_click_pressed(self, gesture, n_press, x, y):
         self.grab_focus()
-        t = self.x_to_time(x)
+        world_x = x + self.hadj.get_value()
+        t = self.x_to_time(world_x)
 
         # Header area: check stars and marker chips
         if y <= self.HEADER_HEIGHT:
             for item in self.session_items:
                 item_x = self.time_to_x(item.timeline_offset)
-                if item_x + 4 <= x <= item_x + 28 and 8 <= y <= 32:
+                if item_x + 4 <= world_x <= item_x + 28 and 8 <= y <= 32:
                     new_star = not item.session.starred
                     item.session.starred = new_star
                     if self.on_star_toggled:
@@ -349,7 +352,7 @@ class TimelineCanvas(Gtk.DrawingArea):
 
                 for m in item.midi_data.markers:
                     mx = self.time_to_x(item.timeline_offset + m.time)
-                    if abs(x - mx) <= 12:
+                    if abs(world_x - mx) <= 12:
                         self.player.seek(item.timeline_offset + m.time)
                         self.queue_draw()
                         return
@@ -364,7 +367,8 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.queue_draw()
 
     def _on_drag_begin(self, gesture, start_x, start_y):
-        self._drag_start_time = self.x_to_time(start_x)
+        world_start_x = start_x + self.hadj.get_value()
+        self._drag_start_time = self.x_to_time(world_start_x)
 
     def _on_drag_update(self, gesture, offset_x, offset_y):
         if self._drag_start_time is None:
@@ -372,8 +376,8 @@ class TimelineCanvas(Gtk.DrawingArea):
         success, start_x, _ = gesture.get_start_point()
         if not success:
             return
-        curr_x = start_x + offset_x
-        curr_t = self.x_to_time(curr_x)
+        curr_world_x = (start_x + offset_x) + self.hadj.get_value()
+        curr_t = self.x_to_time(curr_world_x)
 
         t1 = min(self._drag_start_time, curr_t)
         t2 = max(self._drag_start_time, curr_t)
@@ -397,14 +401,12 @@ class TimelineCanvas(Gtk.DrawingArea):
             return True
         elif abs(dy) > 0 and not (state & Gdk.ModifierType.SHIFT_MASK):
             # Allow regular vertical mouse wheel to scroll horizontally across timeline
-            scrolled = self.get_ancestor(Gtk.ScrolledWindow)
-            if scrolled:
-                hadj = scrolled.get_hadjustment()
-                step = dy * 45.0
-                new_val = max(0.0, min(hadj.get_upper() - hadj.get_page_size(), hadj.get_value() + step))
-                hadj.set_value(new_val)
-                self.queue_draw()
-                return True
+            step = dy * 45.0
+            max_val = max(0.0, self.hadj.get_upper() - self.hadj.get_page_size())
+            new_val = max(0.0, min(max_val, self.hadj.get_value() + step))
+            self.hadj.set_value(new_val)
+            self.queue_draw()
+            return True
         return False
 
     # --- Hierarchical Jump Functions ---
@@ -515,6 +517,13 @@ class TimelineCanvas(Gtk.DrawingArea):
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
         if width <= 0 or height <= 0:
             return
+
+        viewport_w = float(width)
+        if abs(self.hadj.get_page_size() - viewport_w) > 1.0:
+            self.hadj.set_page_size(viewport_w)
+
+        scroll_x = self.hadj.get_value()
+
         cr.set_source_rgb(0.12, 0.12, 0.13)
         cr.paint()
 
@@ -525,6 +534,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         # Draw Pitch Grid lanes and Middle C (C4) guide line
         self._draw_pitch_grid(cr, width, roll_top, roll_bottom, roll_h)
         min_p, _, pitch_range = self._get_global_pitch_bounds()
+
+        # Translate world coordinates by -scroll_x
+        cr.save()
+        cr.translate(-scroll_x, 0.0)
 
         # 1. Draw sessions and notes
         last_header_x = -999.0
@@ -663,9 +676,6 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.rectangle(sel_x, roll_top, sel_w, roll_h)
             cr.stroke()
 
-        # 4. Time Ruler / Footer
-        self._draw_footer_ruler(cr, width, height)
-
         # 5. Acoustic Scrub Line (Dorico Ctrl+Space audition)
         if self.scrub_active and self.scrub_cursor_time is not None:
             scrub_x = self.time_to_x(self.scrub_cursor_time)
@@ -688,6 +698,11 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.line_to(play_x, roll_top)
         cr.close_path()
         cr.fill()
+
+        cr.restore()
+
+        # 4. Time Ruler / Footer
+        self._draw_footer_ruler(cr, width, height, scroll_x)
 
     def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float, tier: int = 0):
         star_char = "★" if item.session.starred else "☆"
@@ -743,7 +758,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         label = text if len(text) <= 12 else text[:10] + "…"
         cr.show_text(label)
 
-    def _draw_footer_ruler(self, cr: cairo.Context, width: int, height: int):
+    def _draw_footer_ruler(self, cr: cairo.Context, width: int, height: int, scroll_x: float):
         ruler_y = height - self.FOOTER_HEIGHT
         cr.set_source_rgb(0.18, 0.18, 0.20)
         cr.rectangle(0, ruler_y, width, self.FOOTER_HEIGHT)
@@ -765,21 +780,22 @@ class TimelineCanvas(Gtk.DrawingArea):
         num_steps = int(self.total_timeline_duration / chosen_step) + 1
         for i in range(num_steps):
             t = i * chosen_step
-            tx = self.time_to_x(t)
-            if tx < 0:
+            world_tx = self.time_to_x(t)
+            screen_tx = world_tx - scroll_x
+            if screen_tx < 0:
                 continue
-            if tx > width:
+            if screen_tx > width:
                 break
 
-            cr.move_to(tx, ruler_y)
-            cr.line_to(tx, ruler_y + 5.0)
+            cr.move_to(screen_tx, ruler_y)
+            cr.line_to(screen_tx, ruler_y + 5.0)
             cr.stroke()
 
             # Ensure minimum 65px between successive time labels to prevent overlap
-            if tx - last_label_x >= 65.0:
+            if screen_tx - last_label_x >= 65.0:
                 mins = int(t // 60)
                 secs = int(t % 60)
                 label = f"{mins:02d}:{secs:02d}"
-                cr.move_to(tx + 3.0, ruler_y + 14.0)
+                cr.move_to(screen_tx + 3.0, ruler_y + 14.0)
                 cr.show_text(label)
-                last_label_x = tx
+                last_label_x = screen_tx

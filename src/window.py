@@ -25,7 +25,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     __gtype_name__ = 'PianolaWindow'
 
     view_stack = Gtk.Template.Child()
-    scrolled_window = Gtk.Template.Child()
+    canvas_container = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
     lbl_time = Gtk.Template.Child()
     lbl_selection = Gtk.Template.Child()
@@ -50,11 +50,11 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.canvas.on_star_toggled = self._on_star_toggled
         self.canvas.on_selection_changed = self._on_selection_changed
 
-        # Put canvas into scrolled window
-        self.scrolled_window.set_child(self.canvas)
+        # Put canvas into container
+        self.canvas_container.append(self.canvas)
 
         # Setup Overview Minimap
-        self.minimap = OverviewMinimap(self.canvas, self.scrolled_window, self.player)
+        self.minimap = OverviewMinimap(self.canvas, self.player)
         self.minimap_container.append(self.minimap)
         self.btn_prev_take.connect("clicked", self._on_prev_take_clicked)
         self.btn_next_take.connect("clicked", self._on_next_take_clicked)
@@ -237,15 +237,16 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.canvas.queue_draw()
             self.minimap.queue_draw()
 
-            # Auto-scroll scrolled_window if playhead near right edge
-            hadj = self.scrolled_window.get_hadjustment()
+            # Auto-scroll canvas viewport if playhead near right edge
+            hadj = self.canvas.hadj
             cur_x = self.canvas.time_to_x(cur_t)
             page_size = hadj.get_page_size()
             val = hadj.get_value()
+            max_val = max(0.0, hadj.get_upper() - page_size)
             if cur_x > val + page_size - 100:
-                hadj.set_value(cur_x - 100)
+                hadj.set_value(min(max_val, cur_x - 100))
             elif cur_x < val:
-                hadj.set_value(max(0, cur_x - 50))
+                hadj.set_value(max(0.0, cur_x - 50))
         return GLib.SOURCE_CONTINUE
 
     def _on_player_tick(self, current_time: float):
@@ -260,16 +261,17 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.canvas.queue_draw()
             self.minimap.queue_draw()
 
-            # Auto-scroll scrolled_window if playhead is past visible bounds
+            # Auto-scroll canvas viewport if playhead is past visible bounds
             if self.player.is_playing:
-                hadj = self.scrolled_window.get_hadjustment()
+                hadj = self.canvas.hadj
                 cur_x = self.canvas.time_to_x(current_time)
                 page_size = hadj.get_page_size()
                 val = hadj.get_value()
+                max_val = max(0.0, hadj.get_upper() - page_size)
                 if cur_x > val + page_size - 100:
-                    hadj.set_value(cur_x - 100)
+                    hadj.set_value(min(max_val, cur_x - 100))
                 elif cur_x < val:
-                    hadj.set_value(max(0, cur_x - 50))
+                    hadj.set_value(max(0.0, cur_x - 50))
             return False
 
         GLib.idle_add(_update)
@@ -300,11 +302,13 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def scroll_to_time(self, t: float):
         """Scroll the viewport so time t is centered in view."""
-        hadj = self.scrolled_window.get_hadjustment()
+        hadj = self.canvas.hadj
         target_x = self.canvas.time_to_x(t)
         page_size = hadj.get_page_size()
-        hadj.set_value(max(0, target_x - (page_size / 3.0)))
+        max_val = max(0.0, hadj.get_upper() - page_size)
+        hadj.set_value(max(0.0, min(max_val, target_x - (page_size / 3.0))))
         self.canvas.queue_draw()
+        self.minimap.queue_draw()
 
     def _on_prev_take_clicked(self, btn):
         curr_t = self.player.current_time

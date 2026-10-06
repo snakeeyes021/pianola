@@ -20,11 +20,11 @@ from .player import AudioPlayer
 class OverviewMinimap(Gtk.DrawingArea):
     """Horizontal bird's-eye overview minimap and viewport navigation controller."""
 
-    def __init__(self, canvas, scrolled_window: Gtk.ScrolledWindow, player: AudioPlayer):
+    def __init__(self, canvas, player: AudioPlayer):
         super().__init__()
         self.canvas = canvas
-        self.scrolled_window = scrolled_window
         self.player = player
+        self.hadj = self.canvas.hadj
 
         self.set_content_width(400)
         self.set_content_height(30)
@@ -32,15 +32,9 @@ class OverviewMinimap(Gtk.DrawingArea):
         self.set_vexpand(False)
         self.set_draw_func(self._on_draw)
 
-    def do_snapshot(self, snapshot):
-        if self.get_width() <= 0 or self.get_height() <= 0:
-            return
-        super().do_snapshot(snapshot)
-
         # Connect adjustments
-        hadj = self.scrolled_window.get_hadjustment()
-        hadj.connect("value-changed", lambda *_: self.queue_draw())
-        hadj.connect("changed", lambda *_: self.queue_draw())
+        self.hadj.connect("value-changed", lambda *_: self.queue_draw())
+        self.hadj.connect("changed", lambda *_: self.queue_draw())
 
         # Gesture: Click to jump viewport
         click = Gtk.GestureClick.new()
@@ -66,41 +60,38 @@ class OverviewMinimap(Gtk.DrawingArea):
         width = self.get_width()
         if width <= 0:
             return
-        hadj = self.scrolled_window.get_hadjustment()
-        upper = max(1.0, hadj.get_upper())
-        page_size = hadj.get_page_size()
+        upper = max(1.0, self.hadj.get_upper())
+        page_size = self.hadj.get_page_size()
 
         # Center viewport around clicked position
         target_canvas_x = (x / width) * upper - (page_size / 2.0)
-        target_canvas_x = max(0.0, min(upper - page_size, target_canvas_x))
-        hadj.set_value(target_canvas_x)
+        max_val = max(0.0, upper - page_size)
+        self.hadj.set_value(max(0.0, min(max_val, target_canvas_x)))
         self.canvas.queue_draw()
         self.queue_draw()
 
     def _on_drag_begin(self, gesture, start_x, start_y):
-        hadj = self.scrolled_window.get_hadjustment()
-        self._drag_start_hadj_val = hadj.get_value()
+        self._drag_start_hadj_val = self.hadj.get_value()
 
     def _on_drag_update(self, gesture, offset_x, offset_y):
         width = self.get_width()
         if width <= 0:
             return
-        hadj = self.scrolled_window.get_hadjustment()
-        upper = max(1.0, hadj.get_upper())
-        page_size = hadj.get_page_size()
+        upper = max(1.0, self.hadj.get_upper())
+        page_size = self.hadj.get_page_size()
 
         delta_canvas = (offset_x / width) * upper
         new_val = self._drag_start_hadj_val + delta_canvas
-        new_val = max(0.0, min(upper - page_size, new_val))
-        hadj.set_value(new_val)
+        max_val = max(0.0, upper - page_size)
+        self.hadj.set_value(max(0.0, min(max_val, new_val)))
         self.canvas.queue_draw()
         self.queue_draw()
 
     def _on_scroll(self, controller, dx, dy):
-        hadj = self.scrolled_window.get_hadjustment()
         step = (dx if abs(dx) > abs(dy) else dy) * 45.0
-        val = max(0.0, min(hadj.get_upper() - hadj.get_page_size(), hadj.get_value() + step))
-        hadj.set_value(val)
+        max_val = max(0.0, self.hadj.get_upper() - self.hadj.get_page_size())
+        val = max(0.0, min(max_val, self.hadj.get_value() + step))
+        self.hadj.set_value(val)
         self.canvas.queue_draw()
         self.queue_draw()
         return True
@@ -108,12 +99,12 @@ class OverviewMinimap(Gtk.DrawingArea):
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
         if width <= 0 or height <= 0:
             return
+
         # 1. Background tray
         cr.set_source_rgb(0.09, 0.09, 0.10)
         cr.paint()
 
-        hadj = self.scrolled_window.get_hadjustment()
-        upper = max(1.0, hadj.get_upper())
+        upper = max(1.0, self.hadj.get_upper())
         if not self.canvas.session_items or upper <= 1.0:
             return
 
@@ -160,8 +151,8 @@ class OverviewMinimap(Gtk.DrawingArea):
                 cr.fill()
 
         # 3. Translucent Viewport Lens (active scroll view)
-        lens_x = hadj.get_value() * scale
-        lens_w = max(16.0, hadj.get_page_size() * scale)
+        lens_x = self.hadj.get_value() * scale
+        lens_w = max(16.0, self.hadj.get_page_size() * scale)
 
         # Lens fill
         cr.set_source_rgba(0.35, 0.55, 0.85, 0.25)

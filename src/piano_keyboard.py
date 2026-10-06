@@ -34,11 +34,6 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
         self.set_vexpand(True)
         self.set_draw_func(self._on_draw)
 
-    def do_snapshot(self, snapshot):
-        if self.get_width() <= 0 or self.get_height() <= 0:
-            return
-        super().do_snapshot(snapshot)
-
     def _get_active_pitches(self) -> Set[int]:
         active = set()
         curr_t = self.player.current_time

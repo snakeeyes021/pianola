@@ -198,11 +198,9 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkScrolledWindow" id="scrolled_window">
+                          <object class="GtkBox" id="canvas_container">
                             <property name="vexpand">True</property>
                             <property name="hexpand">True</property>
-                            <property name="hscrollbar-policy">never</property>
-                            <property name="vscrollbar-policy">never</property>
                           </object>
                         </child>
                       </object>
