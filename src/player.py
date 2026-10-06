@@ -338,8 +338,6 @@ class AudioPlayer:
         self.is_playing: bool = False
         self.current_time: float = 0.0
         self.skip_silence: bool = False
-        self.loop_enabled: bool = False
-        self.loop_range: Optional[tuple] = None
 
         # Active sounding notes during normal playback
         self._playing_active: Set[tuple] = set()
@@ -552,14 +550,6 @@ class AudioPlayer:
                         if next_note and (next_note.start_time - self.current_time) >= 1.0:
                             self.current_time = next_note.start_time
 
-                # Check loop
-                if self.loop_enabled:
-                    if self.loop_range and self.current_time >= self.loop_range[1]:
-                        self.current_time = self.loop_range[0]
-                        self._silence_all_playback_notes()
-                    elif not self.loop_range and self.current_time >= self.duration:
-                        self.current_time = 0.0
-                        self._silence_all_playback_notes()
 
                 if self.current_time >= self.duration:
                     self.current_time = self.duration

@@ -52,12 +52,6 @@
               </object>
             </child>
             <child type="start">
-              <object class="GtkToggleButton" id="btn_loop">
-                <property name="icon-name">media-playlist-repeat-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Loop Selection (Toggle)</property>
-              </object>
-            </child>
-            <child type="start">
               <object class="GtkButton" id="btn_next_section">
                 <property name="icon-name">media-skip-forward-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Next Section (])</property>
