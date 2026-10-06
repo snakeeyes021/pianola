@@ -33,6 +33,7 @@ pianola_sources = [
   'archive.py',
   'player.py',
   'timeline_canvas.py',
+  'overview_minimap.py',
 ]
 
 install_data(pianola_sources, install_dir: moduledir)

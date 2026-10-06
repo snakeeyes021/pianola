@@ -149,10 +149,44 @@
                   <object class="GtkBox">
                     <property name="orientation">vertical</property>
                     <child>
+                      <object class="GtkBox" id="minimap_bar">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">4</property>
+                        <property name="margin-start">8</property>
+                        <property name="margin-end">8</property>
+                        <property name="margin-top">4</property>
+                        <property name="margin-bottom">4</property>
+                        <child>
+                          <object class="GtkButton" id="btn_prev_take">
+                            <property name="icon-name">go-previous-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Jump to Previous Take</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="minimap_container">
+                            <property name="hexpand">True</property>
+                            <property name="vexpand">False</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="btn_next_take">
+                            <property name="icon-name">go-next-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Jump to Next Take</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkScrolledWindow" id="scrolled_window">
                         <property name="vexpand">True</property>
                         <property name="hexpand">True</property>
-                        <property name="hscrollbar-policy">always</property>
+                        <property name="hscrollbar-policy">never</property>
                         <property name="vscrollbar-policy">never</property>
                       </object>
                     </child>

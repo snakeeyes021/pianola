@@ -16,6 +16,7 @@ from gi.repository import Adw, Gtk, Gio, Gdk, GLib
 from .archive import ArchiveManager, SessionRecord, NoteEvent
 from .player import AudioPlayer
 from .timeline_canvas import TimelineCanvas
+from .overview_minimap import OverviewMinimap
 
 
 @Gtk.Template(resource_path='/tech/redfoxlabs/Pianola/window.ui')
@@ -32,6 +33,9 @@ class PianolaWindow(Adw.ApplicationWindow):
     btn_loop = Gtk.Template.Child()
     btn_drag_daw = Gtk.Template.Child()
     btn_calendar = Gtk.Template.Child()
+    minimap_container = Gtk.Template.Child()
+    btn_prev_take = Gtk.Template.Child()
+    btn_next_take = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -46,6 +50,12 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         # Put canvas into scrolled window
         self.scrolled_window.set_child(self.canvas)
+
+        # Setup Overview Minimap
+        self.minimap = OverviewMinimap(self.canvas, self.scrolled_window, self.player)
+        self.minimap_container.append(self.minimap)
+        self.btn_prev_take.connect("clicked", self._on_prev_take_clicked)
+        self.btn_next_take.connect("clicked", self._on_next_take_clicked)
 
         # Player callbacks
         self.player.on_state_changed = self._on_player_state_changed
@@ -217,6 +227,7 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
             self.canvas.queue_draw()
+            self.minimap.queue_draw()
 
             # Auto-scroll scrolled_window if playhead near right edge
             hadj = self.scrolled_window.get_hadjustment()
@@ -239,6 +250,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
             # Redraw canvas so playhead cursor follows playback in real time
             self.canvas.queue_draw()
+            self.minimap.queue_draw()
 
             # Auto-scroll scrolled_window if playhead is past visible bounds
             if self.player.is_playing:
@@ -285,6 +297,38 @@ class PianolaWindow(Adw.ApplicationWindow):
         page_size = hadj.get_page_size()
         hadj.set_value(max(0, target_x - (page_size / 3.0)))
         self.canvas.queue_draw()
+
+    def _on_prev_take_clicked(self, btn):
+        curr_t = self.player.current_time
+        target = None
+        for item in reversed(self.canvas.session_items):
+            if item.timeline_offset < curr_t - 0.5:
+                target = item
+                break
+        if target:
+            self.player.seek(target.timeline_offset)
+            self.scroll_to_time(target.timeline_offset)
+        elif self.canvas.session_items:
+            first = self.canvas.session_items[0]
+            self.player.seek(first.timeline_offset)
+            self.scroll_to_time(first.timeline_offset)
+        self.minimap.queue_draw()
+
+    def _on_next_take_clicked(self, btn):
+        curr_t = self.player.current_time
+        target = None
+        for item in self.canvas.session_items:
+            if item.timeline_offset > curr_t + 0.5:
+                target = item
+                break
+        if target:
+            self.player.seek(target.timeline_offset)
+            self.scroll_to_time(target.timeline_offset)
+        elif self.canvas.session_items:
+            last = self.canvas.session_items[-1]
+            self.player.seek(last.timeline_offset)
+            self.scroll_to_time(last.timeline_offset)
+        self.minimap.queue_draw()
 
     def _on_action_prev_section(self, action, param):
         t = self.player.jump_prev_section()

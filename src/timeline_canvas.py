@@ -391,6 +391,16 @@ class TimelineCanvas(Gtk.DrawingArea):
             elif dy > 0:
                 self.zoom_out()
             return True
+        elif abs(dy) > 0 and not (state & Gdk.ModifierType.SHIFT_MASK):
+            # Allow regular vertical mouse wheel to scroll horizontally across timeline
+            scrolled = self.get_ancestor(Gtk.ScrolledWindow)
+            if scrolled:
+                hadj = scrolled.get_hadjustment()
+                step = dy * 45.0
+                new_val = max(0.0, min(hadj.get_upper() - hadj.get_page_size(), hadj.get_value() + step))
+                hadj.set_value(new_val)
+                self.queue_draw()
+                return True
         return False
 
     # --- Hierarchical Jump Functions ---
