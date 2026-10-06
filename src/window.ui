@@ -11,13 +11,6 @@
         <child type="top">
           <object class="AdwHeaderBar">
             <child type="start">
-              <object class="GtkButton" id="btn_open">
-                <property name="icon-name">document-open-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Open MIDI File (Ctrl+O)</property>
-                <property name="action-name">win.open</property>
-              </object>
-            </child>
-            <child type="start">
               <object class="GtkMenuButton" id="btn_calendar">
                 <property name="icon-name">x-office-calendar-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Jump to Date</property>
@@ -72,13 +65,6 @@
                 <property name="icon-name">open-menu-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Main Menu</property>
                 <property name="menu-model">primary_menu</property>
-              </object>
-            </child>
-            <child type="end">
-              <object class="GtkButton" id="btn_export">
-                <property name="icon-name">document-save-as-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Export MIDI (Ctrl+E)</property>
-                <property name="action-name">win.export</property>
               </object>
             </child>
             <child type="end">
@@ -232,14 +218,6 @@
                             <property name="tooltip-text" translatable="yes">Click and drag to DAW, Notation, or File Manager apps</property>
                             <style>
                               <class name="pill"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Acoustic Scrub: Hold Ctrl+Space</property>
-                            <style>
-                              <class name="dim-label"/>
                             </style>
                           </object>
                         </child>
