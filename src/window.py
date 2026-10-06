@@ -182,21 +182,37 @@ class PianolaWindow(Adw.ApplicationWindow):
         drag_source = Gtk.DragSource.new()
         drag_source.set_actions(Gdk.DragAction.COPY)
         drag_source.connect("prepare", self._on_drag_prepare)
+        drag_source.connect("drag-begin", self._on_drag_begin)
         self.btn_drag_daw.add_controller(drag_source)
+
+    def _on_drag_begin(self, drag_source, drag):
+        display = Gdk.Display.get_default()
+        if display:
+            theme = Gtk.IconTheme.get_for_display(display)
+            if theme and theme.has_icon("audio-x-generic-symbolic"):
+                paintable = theme.lookup_icon("audio-x-generic-symbolic", None, 32, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE)
+                if paintable:
+                    drag_source.set_icon(paintable, 16, 16)
 
     def _on_drag_prepare(self, drag_source, x, y):
         """Prepare MIDI file provider for drag operation supporting text/uri-list and GdkFileList."""
         if not self.canvas.session_items:
             return None
 
+        # Use host-accessible export directory (~/.local/share/midikeep/export) so Flatpak-to-host drop succeeds
+        export_dir = os.path.join(self.archive_mgr.root_dir, "export")
+        try:
+            os.makedirs(export_dir, exist_ok=True)
+        except Exception:
+            export_dir = tempfile.gettempdir()
+
         sel = self.canvas.selection_range
-        temp_dir = tempfile.gettempdir()
         final_path = None
 
         if sel:
             # Marquee slice export
             s_start, s_end = sel
-            final_path = os.path.join(temp_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s.mid")
+            final_path = os.path.join(export_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s.mid")
             all_notes: List[NoteEvent] = []
             for item in self.canvas.session_items:
                 for n in item.midi_data.notes:
@@ -219,11 +235,11 @@ class PianolaWindow(Adw.ApplicationWindow):
                 elif item.timeline_offset <= curr_t:
                     target_item = item
 
-            if os.path.exists(target_item.session.file_path):
+            if target_item.session.file_path and os.path.exists(target_item.session.file_path):
                 final_path = target_item.session.file_path
             else:
-                # Live recording or generated session
-                final_path = os.path.join(temp_dir, f"Pianola_Take_{int(target_item.timeline_offset)}s.mid")
+                # Live recording or memory-only session
+                final_path = os.path.join(export_dir, f"Pianola_Take_{int(target_item.timeline_offset)}s.mid")
                 all_notes = [NoteEvent(
                     pitch=n.pitch,
                     velocity=n.velocity,

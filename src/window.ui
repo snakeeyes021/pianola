@@ -212,13 +212,26 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="btn_drag_daw">
-                            <property name="label" translatable="yes">Drag to Notation / DAW</property>
-                            <property name="icon-name">audio-x-generic-symbolic</property>
+                          <object class="GtkBox" id="btn_drag_daw">
+                            <property name="can-target">True</property>
+                            <property name="focusable">True</property>
                             <property name="tooltip-text" translatable="yes">Click and drag to DAW, Notation, or File Manager apps</property>
+                            <property name="spacing">6</property>
                             <style>
                               <class name="pill"/>
+                              <class name="button"/>
+                              <class name="draggable-pill"/>
                             </style>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">audio-x-generic-symbolic</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Drag to Notation / DAW</property>
+                              </object>
+                            </child>
                           </object>
                         </child>
                       </object>
