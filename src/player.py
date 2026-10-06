@@ -422,6 +422,8 @@ class AudioPlayer:
         with self._lock:
             target_time = max(0.0, min(target_time, self.duration))
             self.current_time = target_time
+            self._start_monotonic = time.monotonic()
+            self._start_seek_offset = target_time
             self._silence_all_playback_notes()
 
         if self.on_tick:

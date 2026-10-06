@@ -59,8 +59,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.selection_range: Optional[Tuple[float, float]] = None
         self._drag_start_time: Optional[float] = None
 
-        # Acoustic scrub state
+        # Acoustic scrub state (Dorico style: Ctrl+Space held)
         self.ctrl_held: bool = False
+        self.space_held: bool = False
+        self.hover_mouse_time: float = 0.0
         self.scrub_active: bool = False
         self.scrub_cursor_time: Optional[float] = None
 
@@ -190,6 +192,21 @@ class TimelineCanvas(Gtk.DrawingArea):
     def _on_key_pressed(self, controller, keyval, keycode, state):
         if keyval in (Gdk.KEY_Control_L, Gdk.KEY_Control_R):
             self.ctrl_held = True
+            return False
+
+        if keyval == Gdk.KEY_space:
+            self.space_held = True
+            # Dorico model: Space while Ctrl is down starts scrubbed audition
+            is_ctrl = self.ctrl_held or bool(state & Gdk.ModifierType.CONTROL_MASK)
+            if is_ctrl:
+                self.ctrl_held = True
+                self.scrub_active = True
+                self.scrub_cursor_time = self.hover_mouse_time
+                self.player.start_scrub()
+                self.player.audit_at(self.hover_mouse_time)
+                self.queue_draw()
+                return True  # Consume event to prevent regular play/pause toggle
+
         return False
 
     def _on_key_released(self, controller, keyval, keycode, state):
@@ -200,14 +217,24 @@ class TimelineCanvas(Gtk.DrawingArea):
                 self.scrub_cursor_time = None
                 self.player.end_scrub()
                 self.queue_draw()
+            return False
+
+        if keyval == Gdk.KEY_space:
+            self.space_held = False
+            if self.scrub_active:
+                # Letting go of space stops the scrubbed audition
+                self.scrub_active = False
+                self.scrub_cursor_time = None
+                self.player.end_scrub()
+                self.queue_draw()
+                return True
+
         return False
 
     def _on_motion(self, controller, x, y):
-        state = controller.get_current_event_state()
-        is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK) or self.ctrl_held
-        if is_ctrl or self.scrub_active:
-            t = self.x_to_time(x)
-            self.scrub_active = True
+        t = self.x_to_time(x)
+        self.hover_mouse_time = t
+        if self.scrub_active:
             self.scrub_cursor_time = t
             self.player.audit_at(t)
             self.queue_draw()

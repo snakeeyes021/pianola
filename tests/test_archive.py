@@ -168,9 +168,39 @@ def test_live_journal_detection():
         print("  ✓ Passed live journal detection.")
 
 
+def test_sustain_pedal_parsing():
+    print('[TEST] test_sustain_pedal_parsing...')
+    import struct, tempfile
+    # Note On at t=0, Note Off at t=100 ticks, CC 64 down at t=50 ticks, CC 64 up at t=250 ticks
+    header = struct.pack('>4sIHHH', b'MThd', 6, 0, 1, 480)
+    track_events = bytearray()
+    track_events.extend(bytes([0x00, 0x90, 0x3C, 0x64]))       # t=0: Note On (pitch 60, vel 100)
+    track_events.extend(bytes([0x32, 0xB0, 0x40, 0x7F]))       # t=50 (+50): CC 64 val 127 (Pedal Down)
+    track_events.extend(bytes([0x32, 0x80, 0x3C, 0x00]))       # t=100 (+50): Note Off
+    track_events.extend(bytes([0x81, 0x16, 0xB0, 0x40, 0x00])) # t=250 (+150): CC 64 val 0 (Pedal Up)
+    track_events.extend(bytes([0x0A, 0xFF, 0x2F, 0x00]))       # t=260 (+10): End of track
+
+    track = struct.pack('>4sI', b'MTrk', len(track_events)) + bytes(track_events)
+    with tempfile.NamedTemporaryFile(suffix='.mid', delete=False) as f:
+        f.write(header + track)
+        tmp_name = f.name
+
+    try:
+        data = MidiParser.parse_file(tmp_name)
+        assert len(data.notes) == 1, f'Expected 1 note, got {len(data.notes)}'
+        note = data.notes[0]
+        assert note.end_time > 0.20, f'Expected note extended by pedal past 0.20s, got end_time={note.end_time}'
+        print('  ✓ Passed CC 64 damper/sustain pedal note extension.')
+    finally:
+        os.unlink(tmp_name)
+
+
+
+
 if __name__ == "__main__":
     test_midi_write_and_parse()
     test_marquee_slice_export()
     test_sqlite_archive_operations()
     test_live_journal_detection()
-    print("\n🎉 ALL TESTS PASSED SUCCESSFULLY!")
+    test_sustain_pedal_parsing()
+    print("\n🎉 ALL ARCHIVE TESTS PASSED SUCCESSFULLY!")

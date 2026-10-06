@@ -258,6 +258,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         gdate = calendar.get_date()
         target = datetime(gdate.get_year(), gdate.get_month(), gdate.get_day_of_month())
         self.canvas.jump_to_day(target)
+        self.scroll_to_time(self.player.current_time)
         popover = self.btn_calendar.get_popover()
         if popover:
             popover.popdown()
@@ -274,11 +275,21 @@ class PianolaWindow(Adw.ApplicationWindow):
         else:
             self.player.play()
 
+    def scroll_to_time(self, t: float):
+        """Scroll the viewport so time t is centered in view."""
+        hadj = self.scrolled_window.get_hadjustment()
+        target_x = self.canvas.time_to_x(t)
+        page_size = hadj.get_page_size()
+        hadj.set_value(max(0, target_x - (page_size / 3.0)))
+        self.canvas.queue_draw()
+
     def _on_action_prev_section(self, action, param):
-        self.player.jump_prev_section()
+        t = self.player.jump_prev_section()
+        self.scroll_to_time(t)
 
     def _on_action_next_section(self, action, param):
-        self.player.jump_next_section()
+        t = self.player.jump_next_section()
+        self.scroll_to_time(t)
 
     def _on_action_open(self, action, param):
         dialog = Gtk.FileDialog()
