@@ -1,17 +1,20 @@
 {
-    "id" : "tech.redfoxlabs.Pianola",
-    "runtime" : "org.gnome.Platform",
-    "runtime-version" : "50",
-    "sdk" : "org.gnome.Sdk",
-    "command" : "pianola",
-    "finish-args" : [
+    "id": "tech.redfoxlabs.Pianola",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "command": "pianola",
+    "finish-args": [
         "--share=network",
         "--share=ipc",
         "--socket=fallback-x11",
         "--device=dri",
-        "--socket=wayland"
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--filesystem=xdg-data/midikeep:rw",
+        "--filesystem=home:ro"
     ],
-    "cleanup" : [
+    "cleanup": [
         "/include",
         "/lib/pkgconfig",
         "/man",
@@ -22,15 +25,15 @@
         "*.la",
         "*.a"
     ],
-    "modules" : [
+    "modules": [
         {
-            "name" : "pianola",
-            "builddir" : true,
-            "buildsystem" : "meson",
-            "sources" : [
+            "name": "pianola",
+            "builddir": true,
+            "buildsystem": "meson",
+            "sources": [
                 {
-                    "type" : "git",
-                    "url" : "file:///home/matt/dev"
+                    "type": "git",
+                    "url": "file:///home/matt/dev"
                 }
             ]
         }

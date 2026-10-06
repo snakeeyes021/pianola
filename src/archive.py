@@ -25,10 +25,19 @@ from typing import List, Tuple, Optional, Dict, Any
 
 def get_midikeep_dir() -> str:
     """Return the Midikeep storage root directory."""
+    # 1. Check standard host/flatpak mounted path (~/.local/share/midikeep)
+    user_midikeep = os.path.expanduser("~/.local/share/midikeep")
+    if os.path.exists(os.path.join(user_midikeep, "index.db")):
+        return user_midikeep
+
+    # 2. Check XDG_DATA_HOME (if set to custom directory on host)
     xdg_data = os.environ.get("XDG_DATA_HOME")
     if xdg_data:
-        return os.path.join(xdg_data, "midikeep")
-    return os.path.expanduser("~/.local/share/midikeep")
+        candidate = os.path.join(xdg_data, "midikeep")
+        if os.path.exists(os.path.join(candidate, "index.db")):
+            return candidate
+
+    return user_midikeep
 
 
 @dataclass

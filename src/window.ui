@@ -46,9 +46,15 @@
             </child>
             <child type="start">
               <object class="GtkButton" id="btn_play_selection">
-                <property name="icon-name">media-playlist-repeat-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Play from Selection (p)</property>
+                <property name="icon-name">edit-select-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Play from Selection Start (p)</property>
                 <property name="action-name">win.play_selection</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkToggleButton" id="btn_loop">
+                <property name="icon-name">media-playlist-repeat-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Loop Selection (Toggle)</property>
               </object>
             </child>
             <child type="start">

@@ -29,6 +29,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     lbl_selection = Gtk.Template.Child()
     btn_play = Gtk.Template.Child()
     btn_skip_silence = Gtk.Template.Child()
+    btn_loop = Gtk.Template.Child()
     btn_calendar = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
@@ -57,6 +58,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         # Connect UI toggles
         self.btn_skip_silence.connect("toggled", self._on_skip_silence_toggled)
+        self.btn_loop.connect("toggled", self._on_loop_toggled)
 
         # Register window actions
         self._setup_actions()
@@ -181,6 +183,7 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.archive_mgr.set_starred(session.id, new_state)
 
     def _on_selection_changed(self, sel_range: Optional[tuple]):
+        self.player.loop_range = sel_range
         if sel_range:
             s1, s2 = sel_range
             dur = s2 - s1
@@ -189,6 +192,9 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.lbl_selection.set_text(f"Selected: {m1:02d}:{s_1:02d} – {m2:02d}:{s_2:02d} ({dur:.1f}s)")
         else:
             self.lbl_selection.set_text("No selection")
+
+    def _on_loop_toggled(self, button):
+        self.player.loop_enabled = button.get_active()
 
     def _on_skip_silence_toggled(self, button):
         self.player.skip_silence = button.get_active()
