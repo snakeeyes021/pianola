@@ -4,39 +4,260 @@
   <requires lib="Adw" version="1.0"/>
   <template class="PianolaWindow" parent="AdwApplicationWindow">
     <property name="title" translatable="yes">Pianola</property>
-    <property name="default-width">800</property>
-    <property name="default-height">600</property>
+    <property name="default-width">1000</property>
+    <property name="default-height">620</property>
     <property name="content">
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar">
+            <child type="start">
+              <object class="GtkMenuButton" id="btn_calendar">
+                <property name="icon-name">x-office-calendar-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Jump to Date</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkSeparator">
+                <property name="orientation">vertical</property>
+                <property name="margin-start">4</property>
+                <property name="margin-end">4</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_prev_section">
+                <property name="focusable">False</property>
+                <property name="icon-name">media-skip-backward-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Previous Section ([)</property>
+                <property name="action-name">win.prev_section</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_play">
+                <property name="focusable">False</property>
+                <property name="icon-name">media-playback-start-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Play / Pause from Cursor (Space)</property>
+                <property name="action-name">win.play_pause</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_play_selection">
+                <property name="focusable">False</property>
+                <property name="icon-name">pan-end-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Play from Selection Start (p)</property>
+                <property name="action-name">win.play_selection</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="btn_next_section">
+                <property name="focusable">False</property>
+                <property name="icon-name">media-skip-forward-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Next Section (])</property>
+                <property name="action-name">win.next_section</property>
+              </object>
+            </child>
+
+            <property name="title-widget">
+              <object class="AdwWindowTitle" id="window_title">
+                <property name="title">Pianola</property>
+                <property name="subtitle" translatable="yes">MIDI Timeline</property>
+              </object>
+            </property>
+
             <child type="end">
-              <object class="GtkMenuButton">
+              <object class="GtkMenuButton" id="btn_menu">
                 <property name="primary">True</property>
                 <property name="icon-name">open-menu-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Main Menu</property>
                 <property name="menu-model">primary_menu</property>
               </object>
             </child>
+            <child type="end">
+              <object class="GtkSeparator">
+                <property name="orientation">vertical</property>
+                <property name="margin-start">4</property>
+                <property name="margin-end">4</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="btn_zoom_in">
+                <property name="icon-name">zoom-in-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Zoom In (Ctrl+=)</property>
+                <property name="action-name">win.zoom_in</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="btn_zoom_out">
+                <property name="icon-name">zoom-out-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Zoom Out (Ctrl+-)</property>
+                <property name="action-name">win.zoom_out</property>
+              </object>
+            </child>
           </object>
         </child>
+
         <property name="content">
-          <object class="GtkLabel" id="label">
-            <property name="label" translatable="yes">Hello, World!</property>
-            <style>
-              <class name="title-1"/>
-            </style>
+          <object class="AdwViewStack" id="view_stack">
+            <child>
+              <object class="AdwViewStackPage">
+                <property name="name">empty</property>
+                <property name="child">
+                  <object class="AdwStatusPage" id="empty_page">
+                    <property name="icon-name">audio-x-generic-symbolic</property>
+                    <property name="title" translatable="yes">No MIDI Recordings Found</property>
+                    <property name="description" translatable="yes">Midikeep archive not found. Open a .mid file or start midikeep-daemon.</property>
+                    <child>
+                      <object class="GtkButton">
+                        <property name="label" translatable="yes">Open MIDI File…</property>
+                        <property name="halign">center</property>
+                        <property name="action-name">win.open</property>
+                        <style>
+                          <class name="pill"/>
+                          <class name="suggested-action"/>
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwViewStackPage">
+                <property name="name">timeline</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <child>
+                      <object class="GtkBox" id="minimap_bar">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">4</property>
+                        <property name="margin-start">8</property>
+                        <property name="margin-end">8</property>
+                        <property name="margin-top">4</property>
+                        <property name="margin-bottom">4</property>
+                        <child>
+                          <object class="GtkButton" id="btn_prev_day">
+                <property name="focusable">False</property>
+                            <property name="icon-name">go-previous-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Jump to Previous Day</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="minimap_container">
+                            <property name="hexpand">True</property>
+                            <property name="vexpand">False</property>
+                            <property name="height-request">30</property>
+                            <property name="width-request">200</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="btn_next_day">
+                <property name="focusable">False</property>
+                            <property name="icon-name">go-next-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Jump to Next Day</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="timeline_body_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="vexpand">True</property>
+                        <property name="hexpand">True</property>
+                        <child>
+                          <object class="GtkBox" id="keyboard_container">
+                            <property name="width-request">50</property>
+                            <property name="height-request">320</property>
+                            <property name="vexpand">True</property>
+                            <property name="hexpand">False</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="canvas_container">
+                            <property name="vexpand">True</property>
+                            <property name="hexpand">True</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="status_bar">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">12</property>
+                        <property name="margin-start">12</property>
+                        <property name="margin-end">12</property>
+                        <property name="margin-top">6</property>
+                        <property name="margin-bottom">6</property>
+                        <child>
+                          <object class="GtkLabel" id="lbl_time">
+                            <property name="label">00:00 / 00:00</property>
+                            <property name="xalign">0</property>
+                            <style>
+                              <class name="numeric"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSeparator">
+                            <property name="orientation">vertical</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="lbl_selection">
+                            <property name="label" translatable="yes">No selection</property>
+                            <property name="hexpand">True</property>
+                            <property name="xalign">0</property>
+                            <style>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkToggleButton" id="btn_multi_track">
+                            <property name="icon-name">view-list-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Toggle Multi-Track View (Ctrl+T)</property>
+                            <property name="valign">center</property>
+                            <property name="focusable">False</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
           </object>
         </property>
       </object>
     </property>
   </template>
+
   <menu id="primary_menu">
     <section>
       <item>
-        <attribute name="label" translatable="yes">_Preferences</attribute>
-        <attribute name="action">app.preferences</attribute>
+        <attribute name="custom">theme_selector</attribute>
       </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">_Open File…</attribute>
+        <attribute name="action">win.open</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">_Export MIDI…</attribute>
+        <attribute name="action">win.export</attribute>
+      </item>
+    </section>
+    <section>
       <item>
         <attribute name="label" translatable="yes">_Keyboard Shortcuts</attribute>
         <attribute name="action">app.shortcuts</attribute>

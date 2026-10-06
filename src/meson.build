@@ -30,6 +30,11 @@ pianola_sources = [
   '__init__.py',
   'main.py',
   'window.py',
+  'archive.py',
+  'player.py',
+  'timeline_canvas.py',
+  'overview_minimap.py',
+  'piano_keyboard.py',
 ]
 
 install_data(pianola_sources, install_dir: moduledir)

@@ -1,0 +1,267 @@
+# piano_keyboard.py
+#
+# Copyright 2026 Matthew Samson
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Visual piano keyboard gutter for Pianola timeline.
+
+Provides a fixed vertical piano keybed anchored to the pitch axis,
+highlighting Middle C (C4) and lighting up active sounding pitches in real time.
+"""
+
+import math
+from typing import Set, Tuple
+import cairo
+from .archive import get_track_color
+
+from gi.repository import Gtk, Gdk, GLib, Adw
+from .timeline_canvas import TimelineCanvas
+from .player import AudioPlayer
+
+
+class PianoKeyboardGutter(Gtk.DrawingArea):
+    """Vertical piano keyboard gutter pinned to the left of the timeline canvas."""
+
+    KEYBOARD_WIDTH = 50
+
+    def __init__(self, canvas: TimelineCanvas, player: AudioPlayer):
+        super().__init__()
+        self.canvas = canvas
+        self.player = player
+
+        self.set_content_width(self.KEYBOARD_WIDTH)
+        self.set_content_height(320)
+        self.set_hexpand(False)
+        self.set_vexpand(True)
+        self.set_draw_func(self._on_draw)
+
+    @property
+    def is_dark(self) -> bool:
+        try:
+            return Adw.StyleManager.get_default().get_dark()
+        except Exception:
+            return True
+
+    def _get_active_pitches(self) -> Set[int]:
+        active = set()
+        curr_t = self.player.current_time
+
+        if self.canvas.scrub_active and self.canvas.scrub_cursor_time is not None:
+            # Active scrub audition pitches
+            t = self.canvas.scrub_cursor_time
+            for item in self.canvas.session_items:
+                for n in item.midi_data.notes:
+                    if item.timeline_offset + n.start_time <= t <= item.timeline_offset + n.end_time:
+                        active.add(n.pitch)
+        elif self.player.is_playing:
+            # Active playback pitches
+            for item in self.canvas.session_items:
+                for n in item.midi_data.notes:
+                    if item.timeline_offset + n.start_time <= curr_t <= item.timeline_offset + n.end_time:
+                        active.add(n.pitch)
+
+        return active
+
+    def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
+        if width <= 0 or height <= 0:
+            return
+        # 1. Background gutter
+        is_dark = self.is_dark
+        if is_dark:
+            cr.set_source_rgb(0.11, 0.11, 0.12)
+        else:
+            cr.set_source_rgb(0.94, 0.94, 0.96)
+        cr.paint()
+
+        roll_top = self.canvas.HEADER_HEIGHT
+        roll_bottom = height - self.canvas.FOOTER_HEIGHT
+        roll_h = max(10.0, roll_bottom - roll_top)
+
+        # Multi-Track Gutter Mode: render instrument badges, channel badges, and real-time sounding glow
+        if self.canvas.multi_track_mode and len(self.canvas.tracks) > 1:
+            lanes = self.canvas.get_track_lane_geometries(roll_top, roll_bottom)
+            curr_t = self.canvas.scrub_cursor_time if (self.canvas.scrub_active and self.canvas.scrub_cursor_time is not None) else self.player.current_time
+
+            for trk, lane_top, lane_bottom in lanes:
+                if trk is None:
+                    continue
+                lane_h = max(10.0, lane_bottom - lane_top)
+
+                is_sounding = False
+                for item in self.canvas.session_items:
+                    for n in item.midi_data.notes:
+                        if n.track_index == trk.track_index and n.channel == trk.channel:
+                            if item.timeline_offset + n.start_time <= curr_t <= item.timeline_offset + n.end_time:
+                                is_sounding = True
+                                break
+                    if is_sounding:
+                        break
+
+                base_r, base_g, base_b = get_track_color(program=trk.program, channel=trk.channel)
+                if is_sounding:
+                    cr.set_source_rgba(base_r, base_g, base_b, 0.28)
+                    cr.rectangle(0, lane_top, width, lane_h)
+                    cr.fill()
+
+                if is_dark:
+                    cr.set_source_rgba(0.25, 0.25, 0.28, 0.8)
+                else:
+                    cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
+                cr.set_line_width(1.0)
+                cr.move_to(0, lane_bottom)
+                cr.line_to(width, lane_bottom)
+                cr.stroke()
+
+                cr.set_source_rgba(base_r, base_g, base_b, 0.95 if is_sounding else 0.70)
+                cr.rectangle(0, lane_top + 4.0, 3.5, lane_h - 8.0)
+                cr.fill()
+
+                pill_x = 7.0
+                pill_y = lane_top + (lane_h / 2.0) - 10.0
+                pill_w = 34.0
+                pill_h = 20.0
+                r = 4.0
+
+                # Elegant rounded badge background
+                cr.set_source_rgba(base_r, base_g, base_b, 0.25 if not is_sounding else 0.45)
+                cr.new_sub_path()
+                cr.arc(pill_x + pill_w - r, pill_y + r, r, -math.pi/2, 0)
+                cr.arc(pill_x + pill_w - r, pill_y + pill_h - r, r, 0, math.pi/2)
+                cr.arc(pill_x + r, pill_y + pill_h - r, r, math.pi/2, math.pi)
+                cr.arc(pill_x + r, pill_y + r, r, math.pi, 3*math.pi/2)
+                cr.close_path()
+                cr.fill()
+
+                # Clean GNOME typography: CH <num>
+                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+                cr.set_font_size(9.0)
+                if is_dark:
+                    cr.set_source_rgb(0.95, 0.95, 0.98)
+                else:
+                    cr.set_source_rgb(0.12, 0.12, 0.18)
+                ch_label = f"CH {trk.channel + 1}"
+                ext = cr.text_extents(ch_label)
+                cr.move_to(pill_x + ((pill_w - ext.width) / 2.0) - ext.x_bearing, pill_y + ((pill_h - ext.height) / 2.0) - ext.y_bearing)
+                cr.show_text(ch_label)
+
+                if is_sounding:
+                    cr.set_source_rgba(0.20, 0.95, 0.65, 0.95)
+                    cr.arc(width - 8.0, lane_top + (lane_h / 2.0), 3.0, 0, 2 * math.pi)
+                    cr.fill()
+
+            if is_dark:
+                cr.set_source_rgba(0.25, 0.25, 0.28, 0.9)
+            else:
+                cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
+            cr.set_line_width(1.0)
+            cr.move_to(width - 0.5, 0)
+            cr.line_to(width - 0.5, height)
+            cr.stroke()
+            return
+
+        min_p, max_p, pitch_range = self.canvas._get_global_pitch_bounds()
+        lane_h = (roll_h - 10.0) / pitch_range
+        active_pitches = self._get_active_pitches()
+
+        # 2. Draw White Keys
+        for p in range(min_p, max_p + 1):
+            is_black = (p % 12) in (1, 3, 6, 8, 10)
+            if is_black:
+                continue
+
+            norm_p = (p - min_p) / pitch_range
+            y = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
+            kh = max(2.5, lane_h)
+
+            if p in active_pitches:
+                cr.set_source_rgba(0.20, 0.85, 0.75, 0.95)
+            else:
+                if is_dark:
+                    cr.set_source_rgba(0.85, 0.85, 0.88, 0.95)
+                else:
+                    cr.set_source_rgba(0.99, 0.99, 1.0, 0.98)
+
+            cr.rectangle(1.0, y - (kh / 2.0), width - 3.0, kh)
+            cr.fill()
+
+            # White key separator line
+            if is_dark:
+                cr.set_source_rgba(0.25, 0.25, 0.28, 0.8)
+            else:
+                cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
+            cr.set_line_width(0.8)
+            cr.rectangle(1.0, y - (kh / 2.0), width - 3.0, kh)
+            cr.stroke()
+
+        # 3. Draw Black Keys (overlayed on top of white keys)
+        black_w = width * 0.62
+        for p in range(min_p, max_p + 1):
+            is_black = (p % 12) in (1, 3, 6, 8, 10)
+            if not is_black:
+                continue
+
+            norm_p = (p - min_p) / pitch_range
+            y = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
+            kh = max(2.0, lane_h * 0.9)
+
+            if p in active_pitches:
+                cr.set_source_rgba(0.15, 0.75, 0.65, 0.95)
+            else:
+                if is_dark:
+                    cr.set_source_rgba(0.13, 0.13, 0.15, 1.0)
+                else:
+                    cr.set_source_rgba(0.20, 0.20, 0.23, 1.0)
+
+            cr.rectangle(1.0, y - (kh / 2.0), black_w, kh)
+            cr.fill()
+
+            # Black key subtle highlight border
+            if is_dark:
+                cr.set_source_rgba(0.3, 0.3, 0.35, 0.9)
+            else:
+                cr.set_source_rgba(0.14, 0.14, 0.16, 0.9)
+            cr.set_line_width(0.8)
+            cr.rectangle(1.0, y - (kh / 2.0), black_w, kh)
+            cr.stroke()
+
+        # 4. Octave & Middle C (C4) labels
+        for p in range(min_p, max_p + 1):
+            if p % 12 != 0:
+                continue
+
+            norm_p = (p - min_p) / pitch_range
+            y = roll_bottom - (norm_p * (roll_h - 10.0)) - 8.0
+
+            if p == 60:
+                # Middle C (C4) badge
+                cr.set_source_rgba(0.18, 0.48, 0.85, 0.95)
+                cr.rectangle(width - 24.0, y - 6.0, 22.0, 12.0)
+                cr.fill()
+
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+                cr.set_font_size(8.5)
+                cr.move_to(width - 21.0, y + 3.0)
+                cr.show_text("C4")
+            else:
+                # Other C octaves
+                oct_name = f"C{(p // 12) - 1}"
+                if is_dark:
+                    cr.set_source_rgba(0.35, 0.35, 0.40, 0.9)
+                else:
+                    cr.set_source_rgba(0.55, 0.55, 0.60, 0.9)
+                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+                cr.set_font_size(8.0)
+                cr.move_to(width - 18.0, y + 3.0)
+                cr.show_text(oct_name)
+
+        # 5. Right border dividing keyboard from roll canvas
+        if is_dark:
+            cr.set_source_rgba(0.25, 0.25, 0.28, 0.9)
+        else:
+            cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
+        cr.set_line_width(1.0)
+        cr.move_to(width - 0.5, 0)
+        cr.line_to(width - 0.5, height)
+        cr.stroke()

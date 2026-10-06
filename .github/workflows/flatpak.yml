@@ -1,0 +1,83 @@
+name: Flatpak CI & Packaging
+
+on:
+  push:
+    branches: [ main, "feature/**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install System Test Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpulse-dev libpulse0 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1
+          echo "PYTHONPATH=/usr/lib/python3/dist-packages" >> $GITHUB_ENV
+
+      - name: Run Test Suite
+        run: |
+          python3 tests/test_archive.py
+          python3 tests/test_player.py
+          python3 tests/test_overview_minimap.py
+          python3 tests/test_timeline_canvas.py
+
+  flatpak-builder:
+    name: Build Flatpak Bundle
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-nightly
+      options: --privileged
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Application
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: tech.redfoxlabs.Pianola.flatpak
+          manifest-path: tech.redfoxlabs.Pianola.json
+          cache-key: flatpak-builder-${{ github.sha }}
+          run-tests: false
+
+      - name: Upload Flatpak Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tech.redfoxlabs.Pianola.flatpak
+          path: tech.redfoxlabs.Pianola.flatpak
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish OCI Image to GHCR
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        run: |
+          echo "Exporting Flatpak OCI image..."
+          flatpak build-bundle --oci repo tech.redfoxlabs.Pianola.oci tech.redfoxlabs.Pianola
+          echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login -u "${{ github.actor }}" --password-stdin ghcr.io
+          IMAGE_TAG="latest"
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            IMAGE_TAG="${GITHUB_REF#refs/tags/v}"
+          fi
+          skopeo copy oci:tech.redfoxlabs.Pianola.oci "docker://ghcr.io/${{ github.repository_owner }}/pianola:${IMAGE_TAG}" || echo "Skipping skopeo push if registry not configured"

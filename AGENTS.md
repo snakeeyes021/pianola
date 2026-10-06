@@ -6,7 +6,7 @@
 * **Core Language:** Python 3 (PyGObject, GTK 4, Libadwaita).
 * **Build System:** Meson (`meson.build`) with GResource and Gettext (`po/`).
 * **Packaging Target:** Flatpak (`tech.redfoxlabs.Pianola.json`), targeted for distribution via RedFoxLabs GitHub Container Registry (`ghcr.io/snakeeyes021/pianola`) and GNOME Circle standards.
-* **App Philosophy:** Focused and frictionless. Play, pause, scrub, scroll, jump dates, skip silences, and drag-and-drop into DAWs. No heavy DAW editing, no score editing, zero bloat.
+* **App Philosophy:** Focused and frictionless. Play, pause, acoustic scrub, continuous infinite scroll, jump dates & sections, skip silences, marquee select, and drag-and-drop into DAWs. No heavy DAW editing, no score editing, zero bloat.
 
 ---
 
@@ -17,7 +17,7 @@ Pianola is the official graphical companion to **Midikeep** (`midikeep-daemon`),
 * **Root Data Directory:** `~/.local/share/midikeep/` (or `$XDG_DATA_HOME/midikeep`)
 * **Index Database:** `~/.local/share/midikeep/index.db`
 * **Recorded Takes:** `~/.local/share/midikeep/sessions/YYYY/MM/DD/session_HH-MM-SS.mid`
-* **Crash Journal:** `~/.local/share/midikeep/journal/`
+* **Crash & Live Journal:** `~/.local/share/midikeep/journal/`
 
 ### SQLite Schema (`index.db`)
 ```sql
@@ -53,36 +53,40 @@ Takes flagged by the musician contain Standard MIDI Marker Meta-Events:
 1. **Default View (Auto-Discovery):**
    * On launch, Pianola checks for the existence of `~/.local/share/midikeep/index.db`.
    * **If the Midikeep archive exists and no specific file was passed on the command line:** Pianola immediately opens into the **Archive Timeline View** by default, as if the entire archive was the file the user intended to open.
+   * **Default Start Location:** Timeline positions at the beginning of the **last session** (if a session is actively being recorded in `~/.local/share/midikeep/journal/`, jump to that active session; otherwise, jump to the most recent complete session in `index.db`).
 2. **Single File Player Mode:**
    * If launched with a file argument (e.g. `pianola /path/to/take.mid` or double-clicking a `.mid` in Nautilus), Pianola opens that single file directly in the player view.
    * A "Open File..." menu action / shortcut (`Ctrl+O`) allows loading any external `.mid` file at any time.
 3. **Empty State:**
    * The application only shows a blank/empty placeholder screen if **no Midikeep archive exists** AND **no file was opened**.
 
-### 3.2 Audio Engine & Auditioning
-* **Synthesis:** Lightweight General MIDI playback via **FluidSynth** (`libfluidsynth` / `pyfluidsynth` or ctypes) using a bundled or system General MIDI SoundFont (`soundfont-fluid-gm` / `GeneralUser GS`).
-* **Audio Backend:** PipeWire / PulseAudio via standard portals (`--socket=pulseaudio`).
-* **Playback Controls:** Play / Pause (`Space`), Stop, Scrub Slider, Elapsed Time & Total Duration.
+### 3.2 Timeline & Acoustic Scrubbing
+* **Infinite Continuous Scroll:** The archive view allows continuous, infinite scrolling across file boundaries along the timeline.
+* **Acoustic Scrubbing (Hover Sustain):** With a key combo (e.g. `Ctrl+Space`), the mouse audits whatever spot it rolls over, sounding and sustaining the active notes at that point in time.
+* **Timeline Zoom:** Standard horizontal zoom controls (e.g. `Ctrl + Wheel`, `Ctrl+=` / `Ctrl+-`, zoom slider).
 
-### 3.3 Navigation, Date Jump & Silence Skipping
-1. **Calendar / Date Picker:**
-   * A clean date picker popover to jump instantly to any recorded day and session.
-2. **Silence Skipping Toggle ("Skip Silence"):**
-   * Fast-forwards past periods with no note events—handling both large inter-session gaps and idle pauses inside a take.
-3. **Marker / Clapper Chips:**
-   * Takes with Clapper markers show visual chips/flags on the timeline scrub bar.
-   * Clicking a marker chip seeks playback directly to that exact moment.
-4. **Starring / Favoriting:**
-   * Ability to toggle the star status (`starred = 1 / 0`) in `index.db` directly from the UI.
+### 3.3 Playback Controls & Navigation
+* **Play from Cursor:** `Space` (toggles play/pause from the current playhead cursor).
+* **Play from Selection:** `p` (toggles play/pause starting from the start of the marquee selection).
+* **Pause:** `Space` or `p`.
+* **Section Jump Navigation:**
+  * Silences of **3 seconds or longer** demarcate a new musical section.
+  * Shortcuts to jump cursor to previous/next section boundary.
+* **Hierarchical Jumps:**
+  * Jump to beginning of file / take.
+  * Jump to beginning of day.
+  * Jump to beginning of month.
+  * Jump to beginning of year.
+  * Jump to beginning of archive.
+* **Calendar / Date Picker:** Popover to jump directly to any date.
+* **Silence Skipping Toggle:** Fast-forwards past periods with no note events.
+* **Clapper Chips:** Visual markers on the timeline scrub bar; clicking jumps to the marker.
+* **Starring:** Toggles `starred = 1 / 0` in `index.db`.
 
-### 3.4 Native Drag & Drop
-* Musician can click and drag any session card or the active take header directly out of Pianola and drop it into:
-  * **Bitwig Studio**
-  * **Reaper**
-  * **Ardour**
-  * **Dorico / MuseScore**
-  * **Nautilus (File Manager)**
-* Uses standard Wayland / X11 MIME drag-and-drop (`text/uri-list` with `file://...` URIs).
+### 3.4 Marquee Selection, Drag & Drop, and Export
+* **Marquee Selection:** Click and drag across the timeline with standard `Shift` (extend) and `Ctrl` (modify) shortcuts to select a time span across files or within a take.
+* **Native Drag & Drop:** Musician can click and drag the selected range or session card directly into Bitwig, Reaper, Ardour, Dorico/MuseScore, or Nautilus (`text/uri-list`).
+* **Export Action:** Export button (`Ctrl+E`) to export the selected time range (marquee slice), the active file, or multiple selected files at once into standalone `.mid` file(s).
 
 ---
 
@@ -124,19 +128,24 @@ flatpak run tech.redfoxlabs.Pianola
 ## 6. Implementation Checklist for the Agent
 
 - [ ] **Archive Manager (`src/archive.py`):**
-  - Read `index.db` sessions with SQLite.
-  - Parse markers and note events from Standard MIDI Files.
-- [ ] **Player Engine (`src/player.py`):**
+  - Read `index.db` sessions with SQLite and inspect live journal in `~/.local/share/midikeep/journal/`.
+  - Parse markers, note events, and silences (>= 3s section boundaries) from Standard MIDI Files.
+- [ ] **Player & Synthesis Engine (`src/player.py`):**
   - Integrate FluidSynth playback with seek, pause, and time tracking.
+  - Implement acoustic scrubbing (hover note sustain on `Ctrl+Space`).
   - Implement silence detection to jump ahead when "Skip Silence" is active.
-- [ ] **Archive Timeline View (`src/archive_view.py` / `src/archive_view.ui`):**
-  - Infinite scroll list of takes grouped by date.
-  - Take cards showing start time, duration, note count, device name, and star toggle.
-- [ ] **Player View & Mini Piano Roll (`src/player_view.py`):**
-  - Scrub slider with note density visualizer.
-  - Marker flags on the timeline.
-- [ ] **Drag & Drop Source:**
-  - Setup `Gtk.DragSource` on session cards and player header with `Gdk.ContentProvider.new_for_value(Gio.File)`.
+- [ ] **Continuous Timeline View (`src/archive_view.py` / `src/timeline_canvas.py`):**
+  - Infinite scrollable timeline across session boundaries.
+  - Marquee time range selection (`Shift`/`Ctrl` support).
+  - Note density / piano roll visualization with Clapper chips.
+  - Horizontal zoom controls.
+- [ ] **Transport & Navigation Controls:**
+  - `Space` (play/pause from cursor), `p` (play/pause from selection).
+  - Jump to section (>= 3s silence), file, day, month, year, archive.
+  - Date picker popover.
+- [ ] **Drag & Drop and Export:**
+  - Setup `Gtk.DragSource` for selected ranges and sessions.
+  - Export selected range / session to `.mid` file.
 - [ ] **Flatpak Packaging:**
   - Bundle `fluidsynth` and soundfont in `tech.redfoxlabs.Pianola.json`.
   - Add GitHub Actions workflow `.github/workflows/flatpak.yml` to publish OCI bundle to GHCR.

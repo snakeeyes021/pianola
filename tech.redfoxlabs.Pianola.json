@@ -1,18 +1,24 @@
 {
-    "id" : "tech.redfoxlabs.Pianola",
-    "runtime" : "org.gnome.Platform",
-    "runtime-version" : "50",
-    "sdk" : "org.gnome.Sdk",
-    "command" : "pianola",
-    "finish-args" : [
+    "id": "tech.redfoxlabs.Pianola",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "command": "pianola",
+    "finish-args": [
         "--share=network",
         "--share=ipc",
         "--socket=fallback-x11",
         "--device=dri",
-        "--socket=wayland"
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--filesystem=xdg-data/midikeep:create",
+        "--filesystem=xdg-cache/pianola:create",
+        "--filesystem=xdg-data/soundfonts:ro",
+        "--filesystem=home:ro"
     ],
-    "cleanup" : [
+    "cleanup": [
         "/include",
+        "/lib/cmake",
         "/lib/pkgconfig",
         "/man",
         "/share/doc",
@@ -22,15 +28,51 @@
         "*.la",
         "*.a"
     ],
-    "modules" : [
+    "modules": [
         {
-            "name" : "pianola",
-            "builddir" : true,
-            "buildsystem" : "meson",
-            "sources" : [
+            "name": "fluidsynth",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DBUILD_SHARED_LIBS=ON",
+                "-Denable-pulseaudio=ON",
+                "-Denable-alsa=ON",
+                "-Denable-jack=OFF",
+                "-Denable-pipewire=OFF",
+                "-Denable-readline=OFF",
+                "-Denable-dbus=OFF"
+            ],
+            "sources": [
                 {
-                    "type" : "git",
-                    "url" : "file:///home/matt/dev"
+                    "type": "archive",
+                    "url": "https://github.com/FluidSynth/fluidsynth/archive/v2.4.1.tar.gz",
+                    "sha256": "d1e64155ac902116ed3d4dea512719d8c04ab3877db2e8fb160284379f570a2f"
+                }
+            ]
+        },
+        {
+            "name": "soundfont-fluid-gm",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm644 FluidR3_GM.sf2 /app/share/soundfonts/FluidR3_GM.sf2",
+                "ln -sf FluidR3_GM.sf2 /app/share/soundfonts/default.sf2"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://deb.debian.org/debian/pool/main/f/fluid-soundfont/fluid-soundfont_3.1.orig.tar.gz",
+                    "sha256": "2621acaa1c78e4abdb24bdd163230cc577e61276936d6aa6e3180582142f0343"
+                }
+            ]
+        },
+        {
+            "name": "pianola",
+            "builddir": true,
+            "buildsystem": "meson",
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "."
                 }
             ]
         }
