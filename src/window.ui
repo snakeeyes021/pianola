@@ -183,11 +183,25 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkScrolledWindow" id="scrolled_window">
+                      <object class="GtkBox" id="timeline_body_box">
+                        <property name="orientation">horizontal</property>
                         <property name="vexpand">True</property>
                         <property name="hexpand">True</property>
-                        <property name="hscrollbar-policy">never</property>
-                        <property name="vscrollbar-policy">never</property>
+                        <child>
+                          <object class="GtkBox" id="keyboard_container">
+                            <property name="width-request">50</property>
+                            <property name="vexpand">True</property>
+                            <property name="hexpand">False</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkScrolledWindow" id="scrolled_window">
+                            <property name="vexpand">True</property>
+                            <property name="hexpand">True</property>
+                            <property name="hscrollbar-policy">never</property>
+                            <property name="vscrollbar-policy">never</property>
+                          </object>
+                        </child>
                       </object>
                     </child>
                     <child>

@@ -521,6 +521,8 @@ class TimelineCanvas(Gtk.DrawingArea):
         min_p, _, pitch_range = self._get_global_pitch_bounds()
 
         # 1. Draw sessions and notes
+        last_header_x = -999.0
+        header_tier = 0
         for item in self.session_items:
             item_x = self.time_to_x(item.timeline_offset)
             item_end_x = self.time_to_x(item.end_timeline_offset)
@@ -541,8 +543,14 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.line_to(item_x, height)
             cr.stroke()
 
-            # Session Header badge
-            self._draw_session_header(cr, item, item_x, item_w)
+            # Session Header badge with collision tiering
+            if item_x - last_header_x < 110.0:
+                header_tier = 1 - header_tier
+            else:
+                header_tier = 0
+            last_header_x = item_x
+
+            self._draw_session_header(cr, item, item_x, item_w, tier=header_tier)
 
             # Draw Notes & Pedal Tails
             notes = item.midi_data.notes
@@ -583,10 +591,19 @@ class TimelineCanvas(Gtk.DrawingArea):
                         cr.stroke()
                         cr.set_dash([])
 
-            # Clapper Marker Chips
+            # Clapper Marker Chips with collision tiering
+            last_marker_x = -999.0
+            marker_tier = 0
             for m in item.midi_data.markers:
                 mx = self.time_to_x(item.timeline_offset + m.time)
-                self._draw_marker_chip(cr, m.text, mx, roll_top - 14.0)
+                if abs(mx - last_marker_x) < 45.0:
+                    marker_tier = 1 - marker_tier
+                else:
+                    marker_tier = 0
+                last_marker_x = mx
+
+                chip_y = roll_top - 14.0 if marker_tier == 0 else roll_top - 28.0
+                self._draw_marker_chip(cr, m.text, mx, chip_y)
 
         # 2. Draw Collapsed Silence Break Folds (// [pause])
         for gap in self.collapsed_gaps:
@@ -666,28 +683,40 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.close_path()
         cr.fill()
 
-    def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float):
+    def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float, tier: int = 0):
         star_char = "★" if item.session.starred else "☆"
         cr.set_source_rgb(0.95, 0.75, 0.15) if item.session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
         cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        cr.set_font_size(14.0)
-        cr.move_to(x + 6.0, 22.0)
+        cr.set_font_size(13.0)
+
+        y_offset = 0.0 if tier == 0 else 16.0
+        cr.move_to(x + 6.0, 20.0 + y_offset)
         cr.show_text(star_char)
 
         cr.set_source_rgb(0.85, 0.85, 0.88)
-        cr.set_font_size(11.0)
-        date_str = item.session.start_time.strftime("%b %-d, %-I:%M %p")
-        badge = f"{date_str} • {item.session.device_name}"
+        cr.set_font_size(10.5)
+
+        # Adaptive text depending on available horizontal space
+        if w >= 150.0:
+            date_str = item.session.start_time.strftime("%b %-d, %-I:%M %p")
+            badge = f"{date_str} • {item.session.device_name}"
+        elif w >= 65.0:
+            badge = item.session.start_time.strftime("%-I:%M %p")
+        else:
+            badge = item.session.start_time.strftime("%-I:%M")
+
         if item.session.is_live:
-            badge = f"🔴 LIVE • {badge}"
-        cr.move_to(x + 24.0, 21.0)
+            badge = f"🔴 {badge}"
+
+        cr.move_to(x + 22.0, 19.0 + y_offset)
         cr.show_text(badge)
 
-        cr.set_source_rgb(0.6, 0.6, 0.65)
-        cr.set_font_size(10.0)
-        stats = f"{int(item.duration)}s • {item.session.note_count} notes"
-        cr.move_to(x + 24.0, 35.0)
-        cr.show_text(stats)
+        if w >= 140.0 and tier == 0:
+            cr.set_source_rgb(0.6, 0.6, 0.65)
+            cr.set_font_size(9.5)
+            stats = f"{int(item.duration)}s • {item.session.note_count} notes"
+            cr.move_to(x + 22.0, 32.0)
+            cr.show_text(stats)
 
     def _draw_marker_chip(self, cr: cairo.Context, text: str, x: float, y: float):
         cr.set_source_rgba(0.2, 0.45, 0.3, 0.9)
@@ -710,28 +739,41 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _draw_footer_ruler(self, cr: cairo.Context, width: int, height: int):
         ruler_y = height - self.FOOTER_HEIGHT
-        cr.set_source_rgb(0.18, 0.18, 0.2)
+        cr.set_source_rgb(0.18, 0.18, 0.20)
         cr.rectangle(0, ruler_y, width, self.FOOTER_HEIGHT)
         cr.fill()
 
-        # Step marks across timeline
-        step_sec = 5.0 if self.px_per_sec >= 30.0 else (10.0 if self.px_per_sec >= 15.0 else 30.0)
-        num_steps = int(self.total_timeline_duration / step_sec) + 1
+        # Dynamic step intervals (in seconds): 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600
+        possible_steps = [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0]
+        chosen_step = possible_steps[-1]
+        for step in possible_steps:
+            if step * self.px_per_sec >= 85.0:
+                chosen_step = step
+                break
 
-        cr.set_source_rgb(0.5, 0.5, 0.55)
+        cr.set_source_rgb(0.55, 0.55, 0.60)
         cr.set_font_size(9.0)
         cr.set_line_width(1.0)
 
+        last_label_x = -100.0
+        num_steps = int(self.total_timeline_duration / chosen_step) + 1
         for i in range(num_steps):
-            t = i * step_sec
+            t = i * chosen_step
             tx = self.time_to_x(t)
+            if tx < 0:
+                continue
             if tx > width:
                 break
+
             cr.move_to(tx, ruler_y)
             cr.line_to(tx, ruler_y + 5.0)
             cr.stroke()
 
-            mins = int(t // 60)
-            secs = int(t % 60)
-            cr.move_to(tx + 2.0, ruler_y + 13.0)
-            cr.show_text(f"{mins}:{secs:02d}")
+            # Ensure minimum 65px between successive time labels to prevent overlap
+            if tx - last_label_x >= 65.0:
+                mins = int(t // 60)
+                secs = int(t % 60)
+                label = f"{mins:02d}:{secs:02d}"
+                cr.move_to(tx + 3.0, ruler_y + 14.0)
+                cr.show_text(label)
+                last_label_x = tx

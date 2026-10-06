@@ -17,6 +17,7 @@ from .archive import ArchiveManager, SessionRecord, NoteEvent
 from .player import AudioPlayer
 from .timeline_canvas import TimelineCanvas
 from .overview_minimap import OverviewMinimap
+from .piano_keyboard import PianoKeyboardGutter
 
 
 @Gtk.Template(resource_path='/tech/redfoxlabs/Pianola/window.ui')
@@ -34,6 +35,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     btn_drag_daw = Gtk.Template.Child()
     btn_calendar = Gtk.Template.Child()
     minimap_container = Gtk.Template.Child()
+    keyboard_container = Gtk.Template.Child()
     btn_prev_take = Gtk.Template.Child()
     btn_next_take = Gtk.Template.Child()
 
@@ -56,6 +58,10 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.minimap_container.append(self.minimap)
         self.btn_prev_take.connect("clicked", self._on_prev_take_clicked)
         self.btn_next_take.connect("clicked", self._on_next_take_clicked)
+
+        # Setup Visual Piano Keyboard Gutter
+        self.keyboard = PianoKeyboardGutter(self.canvas, self.player)
+        self.keyboard_container.append(self.keyboard)
 
         # Player callbacks
         self.player.on_state_changed = self._on_player_state_changed
@@ -219,6 +225,8 @@ class PianolaWindow(Adw.ApplicationWindow):
         ))
 
     def _on_ui_tick(self, widget, frame_clock):
+        if self.player.is_playing or self.canvas.scrub_active:
+            self.keyboard.queue_draw()
         if self.player.is_playing:
             cur_t = self.player.current_time
             cur_m, cur_s = int(cur_t // 60), int(cur_t % 60)
