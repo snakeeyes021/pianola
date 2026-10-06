@@ -479,40 +479,23 @@ class TimelineCanvas(Gtk.DrawingArea):
                 cr.fill()
 
             if p == 60:
-                # Middle C (C4 = 60) highlight guide line
-                cr.set_source_rgba(0.25, 0.65, 0.95, 0.5)
+                # Middle C (C4 = 60) highlight guide line across piano roll
+                cr.set_source_rgba(0.25, 0.65, 0.95, 0.45)
                 cr.set_line_width(1.2)
                 cr.set_dash([4.0, 4.0])
                 cr.move_to(0, y)
                 cr.line_to(width, y)
                 cr.stroke()
                 cr.set_dash([])
-
-                # Badge label
-                cr.set_source_rgba(0.15, 0.45, 0.75, 0.85)
-                cr.rectangle(4.0, y - 7.0, 84.0, 14.0)
-                cr.fill()
-                cr.set_source_rgb(1.0, 1.0, 1.0)
-                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-                cr.set_font_size(9.0)
-                cr.move_to(8.0, y + 3.0)
-                cr.show_text("Middle C (C4)")
             elif p % 12 == 0:
-                # Other C octaves
-                cr.set_source_rgba(0.4, 0.4, 0.45, 0.25)
+                # Other C octave guide lines
+                cr.set_source_rgba(0.4, 0.4, 0.45, 0.22)
                 cr.set_line_width(0.8)
                 cr.set_dash([2.0, 4.0])
                 cr.move_to(0, y)
                 cr.line_to(width, y)
                 cr.stroke()
                 cr.set_dash([])
-
-                octave_name = f"C{(p // 12) - 1}"
-                cr.set_source_rgba(0.6, 0.6, 0.65, 0.7)
-                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-                cr.set_font_size(8.5)
-                cr.move_to(6.0, y + 3.0)
-                cr.show_text(octave_name)
 
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
         if width <= 0 or height <= 0:

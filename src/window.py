@@ -237,16 +237,15 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.canvas.queue_draw()
             self.minimap.queue_draw()
 
-            # Auto-scroll canvas viewport if playhead near right edge
-            hadj = self.canvas.hadj
-            cur_x = self.canvas.time_to_x(cur_t)
-            page_size = hadj.get_page_size()
-            val = hadj.get_value()
-            max_val = max(0.0, hadj.get_upper() - page_size)
-            if cur_x > val + page_size - 100:
-                hadj.set_value(min(max_val, cur_x - 100))
-            elif cur_x < val:
-                hadj.set_value(max(0.0, cur_x - 50))
+            # Auto-scroll canvas viewport if playhead approaches right edge (when user is not dragging)
+            if not self.minimap.is_dragging and not self.canvas._drag_start_time:
+                hadj = self.canvas.hadj
+                cur_x = self.canvas.time_to_x(cur_t)
+                page_size = hadj.get_page_size()
+                val = hadj.get_value()
+                max_val = max(0.0, hadj.get_upper() - page_size)
+                if cur_x > val + page_size - 80:
+                    hadj.set_value(min(max_val, cur_x - 80))
         return GLib.SOURCE_CONTINUE
 
     def _on_player_tick(self, current_time: float):
@@ -257,21 +256,9 @@ class PianolaWindow(Adw.ApplicationWindow):
             tot_m, tot_s = int(tot // 60), int(tot % 60)
             self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
-            # Redraw canvas so playhead cursor follows playback in real time
+            # Redraw canvas and minimap so playhead cursor follows playback in real time
             self.canvas.queue_draw()
             self.minimap.queue_draw()
-
-            # Auto-scroll canvas viewport if playhead is past visible bounds
-            if self.player.is_playing:
-                hadj = self.canvas.hadj
-                cur_x = self.canvas.time_to_x(current_time)
-                page_size = hadj.get_page_size()
-                val = hadj.get_value()
-                max_val = max(0.0, hadj.get_upper() - page_size)
-                if cur_x > val + page_size - 100:
-                    hadj.set_value(min(max_val, cur_x - 100))
-                elif cur_x < val:
-                    hadj.set_value(max(0.0, cur_x - 50))
             return False
 
         GLib.idle_add(_update)

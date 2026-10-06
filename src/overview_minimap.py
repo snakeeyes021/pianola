@@ -36,15 +36,11 @@ class OverviewMinimap(Gtk.DrawingArea):
         self.hadj.connect("value-changed", lambda *_: self.queue_draw())
         self.hadj.connect("changed", lambda *_: self.queue_draw())
 
-        # Gesture: Click to jump viewport
-        click = Gtk.GestureClick.new()
-        click.connect("pressed", self._on_click_pressed)
-        self.add_controller(click)
-
-        # Gesture: Drag to pan viewport lens
+        # Gesture: Unified Drag controller for both click-to-jump and lens panning
         drag = Gtk.GestureDrag.new()
         drag.connect("drag-begin", self._on_drag_begin)
         drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
         self.add_controller(drag)
 
         # Gesture: Scroll wheel to pan viewport
@@ -54,24 +50,40 @@ class OverviewMinimap(Gtk.DrawingArea):
         scroll.connect("scroll", self._on_scroll)
         self.add_controller(scroll)
 
-        self._drag_start_hadj_val = 0.0
+        self.is_dragging: bool = False
+        self._drag_start_hadj_val: float = 0.0
 
-    def _on_click_pressed(self, gesture, n_press, x, y):
+    def _on_drag_begin(self, gesture, start_x, start_y):
         width = self.get_width()
         if width <= 0:
             return
+        self.is_dragging = True
+
         upper = max(1.0, self.hadj.get_upper())
         page_size = self.hadj.get_page_size()
+        scale = width / upper
 
-        # Center viewport around clicked position
-        target_canvas_x = (x / width) * upper - (page_size / 2.0)
-        max_val = max(0.0, upper - page_size)
-        self.hadj.set_value(max(0.0, min(max_val, target_canvas_x)))
+        lens_x = self.hadj.get_value() * scale
+        lens_w = max(16.0, page_size * scale)
+
+        # If user clicked outside the current lens, jump the lens center to the click position
+        if start_x < lens_x or start_x > lens_x + lens_w:
+            target_canvas_x = (start_x / width) * upper - (page_size / 2.0)
+            max_val = max(0.0, upper - page_size)
+            target_canvas_x = max(0.0, min(max_val, target_canvas_x))
+            self.hadj.set_value(target_canvas_x)
+            self._drag_start_hadj_val = target_canvas_x
+
+            # Seek playback to the clicked timeline position
+            if self.canvas.total_timeline_duration > 0:
+                clicked_t = (start_x / width) * self.canvas.total_timeline_duration
+                self.player.seek(clicked_t)
+        else:
+            # User clicked directly inside the lens; grab and drag smoothly from current position
+            self._drag_start_hadj_val = self.hadj.get_value()
+
         self.canvas.queue_draw()
         self.queue_draw()
-
-    def _on_drag_begin(self, gesture, start_x, start_y):
-        self._drag_start_hadj_val = self.hadj.get_value()
 
     def _on_drag_update(self, gesture, offset_x, offset_y):
         width = self.get_width()
@@ -80,10 +92,16 @@ class OverviewMinimap(Gtk.DrawingArea):
         upper = max(1.0, self.hadj.get_upper())
         page_size = self.hadj.get_page_size()
 
+        # 1:1 physical tracking of the lens with the mouse cursor
         delta_canvas = (offset_x / width) * upper
         new_val = self._drag_start_hadj_val + delta_canvas
         max_val = max(0.0, upper - page_size)
         self.hadj.set_value(max(0.0, min(max_val, new_val)))
+        self.canvas.queue_draw()
+        self.queue_draw()
+
+    def _on_drag_end(self, gesture, offset_x, offset_y):
+        self.is_dragging = False
         self.canvas.queue_draw()
         self.queue_draw()
 
