@@ -62,16 +62,32 @@ When running on RedFox OS or systems with the [Midikeep](https://github.com/snak
 
 ---
 
-## Building & Installation
+## Installation
 
-### Flatpak (Recommended)
-Pianola is packaged as a Flatpak using the GNOME 47 runtime:
+Download the `tech.redfoxlabs.Pianola.flatpak` bundle from the [latest release](https://github.com/snakeeyes021/pianola/releases/latest) and install it:
 
 ```bash
-# Build and install locally
-flatpak-builder --user --install --force-clean build-dir tech.redfoxlabs.Pianola.json
+flatpak install --user tech.redfoxlabs.Pianola.flatpak
+```
 
-# Run
+Or download and install directly from the terminal:
+
+```bash
+curl -LO https://github.com/snakeeyes021/pianola/releases/latest/download/tech.redfoxlabs.Pianola.flatpak
+flatpak install --user tech.redfoxlabs.Pianola.flatpak
+```
+
+---
+
+## Building from Source
+
+### Flatpak
+Requires `flatpak-builder` and the GNOME 47 SDK:
+
+```bash
+git clone https://github.com/snakeeyes021/pianola.git
+cd pianola
+flatpak-builder --user --install --force-clean build-dir tech.redfoxlabs.Pianola.json
 flatpak run tech.redfoxlabs.Pianola
 ```
 
@@ -88,6 +104,8 @@ flatpak run tech.redfoxlabs.Pianola
 Requires `python3-gobject`, `gtk4`, `libadwaita-1`, `fluidsynth`, and `cairo`:
 
 ```bash
+git clone https://github.com/snakeeyes021/pianola.git
+cd pianola
 meson setup _build
 meson compile -C _build
 ./_build/src/pianola
