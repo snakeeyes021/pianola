@@ -13,7 +13,7 @@ highlighting Middle C (C4) and lighting up active sounding pitches in real time.
 from typing import Set, Tuple
 import cairo
 
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, Adw
 from .timeline_canvas import TimelineCanvas
 from .player import AudioPlayer
 
@@ -33,6 +33,13 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
         self.set_hexpand(False)
         self.set_vexpand(True)
         self.set_draw_func(self._on_draw)
+
+    @property
+    def is_dark(self) -> bool:
+        try:
+            return Adw.StyleManager.get_default().get_dark()
+        except Exception:
+            return True
 
     def _get_active_pitches(self) -> Set[int]:
         active = set()
@@ -58,7 +65,11 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
         if width <= 0 or height <= 0:
             return
         # 1. Background gutter
-        cr.set_source_rgb(0.11, 0.11, 0.12)
+        is_dark = self.is_dark
+        if is_dark:
+            cr.set_source_rgb(0.11, 0.11, 0.12)
+        else:
+            cr.set_source_rgb(0.94, 0.94, 0.96)
         cr.paint()
 
         roll_top = self.canvas.HEADER_HEIGHT
@@ -82,13 +93,19 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
             if p in active_pitches:
                 cr.set_source_rgba(0.20, 0.85, 0.75, 0.95)
             else:
-                cr.set_source_rgba(0.85, 0.85, 0.88, 0.95)
+                if is_dark:
+                    cr.set_source_rgba(0.85, 0.85, 0.88, 0.95)
+                else:
+                    cr.set_source_rgba(0.99, 0.99, 1.0, 0.98)
 
             cr.rectangle(1.0, y - (kh / 2.0), width - 3.0, kh)
             cr.fill()
 
             # White key separator line
-            cr.set_source_rgba(0.25, 0.25, 0.28, 0.8)
+            if is_dark:
+                cr.set_source_rgba(0.25, 0.25, 0.28, 0.8)
+            else:
+                cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
             cr.set_line_width(0.8)
             cr.rectangle(1.0, y - (kh / 2.0), width - 3.0, kh)
             cr.stroke()
@@ -107,13 +124,19 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
             if p in active_pitches:
                 cr.set_source_rgba(0.15, 0.75, 0.65, 0.95)
             else:
-                cr.set_source_rgba(0.13, 0.13, 0.15, 1.0)
+                if is_dark:
+                    cr.set_source_rgba(0.13, 0.13, 0.15, 1.0)
+                else:
+                    cr.set_source_rgba(0.20, 0.20, 0.23, 1.0)
 
             cr.rectangle(1.0, y - (kh / 2.0), black_w, kh)
             cr.fill()
 
             # Black key subtle highlight border
-            cr.set_source_rgba(0.3, 0.3, 0.35, 0.9)
+            if is_dark:
+                cr.set_source_rgba(0.3, 0.3, 0.35, 0.9)
+            else:
+                cr.set_source_rgba(0.14, 0.14, 0.16, 0.9)
             cr.set_line_width(0.8)
             cr.rectangle(1.0, y - (kh / 2.0), black_w, kh)
             cr.stroke()
@@ -140,14 +163,20 @@ class PianoKeyboardGutter(Gtk.DrawingArea):
             else:
                 # Other C octaves
                 oct_name = f"C{(p // 12) - 1}"
-                cr.set_source_rgba(0.35, 0.35, 0.40, 0.9)
+                if is_dark:
+                    cr.set_source_rgba(0.35, 0.35, 0.40, 0.9)
+                else:
+                    cr.set_source_rgba(0.55, 0.55, 0.60, 0.9)
                 cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
                 cr.set_font_size(8.0)
                 cr.move_to(width - 18.0, y + 3.0)
                 cr.show_text(oct_name)
 
         # 5. Right border dividing keyboard from roll canvas
-        cr.set_source_rgba(0.25, 0.25, 0.28, 0.9)
+        if is_dark:
+            cr.set_source_rgba(0.25, 0.25, 0.28, 0.9)
+        else:
+            cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
         cr.set_line_width(1.0)
         cr.move_to(width - 0.5, 0)
         cr.line_to(width - 0.5, height)

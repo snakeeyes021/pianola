@@ -60,7 +60,7 @@
             </property>
 
             <child type="end">
-              <object class="GtkMenuButton">
+              <object class="GtkMenuButton" id="btn_menu">
                 <property name="primary">True</property>
                 <property name="icon-name">open-menu-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Main Menu</property>
@@ -234,6 +234,11 @@
   </template>
 
   <menu id="primary_menu">
+    <section>
+      <item>
+        <attribute name="custom">theme_selector</attribute>
+      </item>
+    </section>
     <section>
       <item>
         <attribute name="label" translatable="yes">_Open File…</attribute>

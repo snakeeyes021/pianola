@@ -13,7 +13,7 @@ interactive translucent viewport lens replacing the default horizontal scrollbar
 from typing import Optional
 import cairo
 
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, Adw
 from .player import AudioPlayer
 
 
@@ -52,6 +52,13 @@ class OverviewMinimap(Gtk.DrawingArea):
 
         self.is_dragging: bool = False
         self._drag_start_hadj_val: float = 0.0
+
+    @property
+    def is_dark(self) -> bool:
+        try:
+            return Adw.StyleManager.get_default().get_dark()
+        except Exception:
+            return True
 
     def _on_drag_begin(self, gesture, start_x, start_y):
         width = self.get_width()
@@ -115,7 +122,11 @@ class OverviewMinimap(Gtk.DrawingArea):
             return
 
         # 1. Background tray
-        cr.set_source_rgb(0.09, 0.09, 0.10)
+        is_dark = self.is_dark
+        if is_dark:
+            cr.set_source_rgb(0.09, 0.09, 0.10)
+        else:
+            cr.set_source_rgb(0.92, 0.92, 0.94)
         cr.paint()
 
         upper = max(1.0, self.hadj.get_upper())
@@ -134,12 +145,18 @@ class OverviewMinimap(Gtk.DrawingArea):
             sw = max(1.5, ex - sx)
 
             # Session background block
-            cr.set_source_rgba(0.14, 0.14, 0.16, 0.6)
+            if is_dark:
+                cr.set_source_rgba(0.14, 0.14, 0.16, 0.6)
+            else:
+                cr.set_source_rgba(0.85, 0.85, 0.88, 0.7)
             cr.rectangle(sx, 1.0, sw, height - 2.0)
             cr.fill()
 
             # Take boundary separator line
-            cr.set_source_rgba(0.32, 0.32, 0.36, 0.6)
+            if is_dark:
+                cr.set_source_rgba(0.32, 0.32, 0.36, 0.6)
+            else:
+                cr.set_source_rgba(0.72, 0.72, 0.76, 0.7)
             cr.set_line_width(1.0)
             cr.move_to(sx, 1.0)
             cr.line_to(sx, height - 1.0)
@@ -148,7 +165,10 @@ class OverviewMinimap(Gtk.DrawingArea):
             # Mini notes density
             notes = item.midi_data.notes
             if notes:
-                cr.set_source_rgba(0.20, 0.78, 0.72, 0.65)
+                if is_dark:
+                    cr.set_source_rgba(0.20, 0.78, 0.72, 0.65)
+                else:
+                    cr.set_source_rgba(0.10, 0.55, 0.75, 0.70)
                 for n in notes:
                     nx = self.canvas.time_to_x(item.timeline_offset + n.start_time) * scale
                     n_end_x = self.canvas.time_to_x(item.timeline_offset + n.end_time) * scale
@@ -169,18 +189,27 @@ class OverviewMinimap(Gtk.DrawingArea):
         lens_w = max(16.0, self.hadj.get_page_size() * scale)
 
         # Lens fill
-        cr.set_source_rgba(0.35, 0.55, 0.85, 0.25)
+        if is_dark:
+            cr.set_source_rgba(0.35, 0.55, 0.85, 0.25)
+        else:
+            cr.set_source_rgba(0.20, 0.45, 0.85, 0.20)
         cr.rectangle(lens_x, 1.0, lens_w, height - 2.0)
         cr.fill()
 
         # Lens border
-        cr.set_source_rgba(0.45, 0.75, 1.0, 0.85)
+        if is_dark:
+            cr.set_source_rgba(0.45, 0.75, 1.0, 0.85)
+        else:
+            cr.set_source_rgba(0.15, 0.45, 0.85, 0.85)
         cr.set_line_width(1.2)
         cr.rectangle(lens_x, 1.0, lens_w, height - 2.0)
         cr.stroke()
 
         # Grip handles on left and right borders of lens
-        cr.set_source_rgba(0.75, 0.88, 1.0, 0.9)
+        if is_dark:
+            cr.set_source_rgba(0.75, 0.88, 1.0, 0.9)
+        else:
+            cr.set_source_rgba(0.10, 0.35, 0.75, 0.9)
         cr.set_line_width(1.5)
         cr.move_to(lens_x + 3.0, 7.0)
         cr.line_to(lens_x + 3.0, height - 7.0)
@@ -199,7 +228,10 @@ class OverviewMinimap(Gtk.DrawingArea):
             cr.stroke()
 
         # 5. Outer border tray
-        cr.set_source_rgba(0.20, 0.20, 0.23, 0.9)
+        if is_dark:
+            cr.set_source_rgba(0.20, 0.20, 0.23, 0.9)
+        else:
+            cr.set_source_rgba(0.80, 0.80, 0.84, 0.9)
         cr.set_line_width(1.0)
         cr.rectangle(0.5, 0.5, width - 1.0, height - 1.0)
         cr.stroke()

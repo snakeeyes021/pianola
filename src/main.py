@@ -20,7 +20,7 @@ from gettext import gettext as _
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Gtk, Gio, Adw
+from gi.repository import Gtk, Gio, Adw, Gdk
 from .window import PianolaWindow
 
 
@@ -48,6 +48,26 @@ class PianolaApplication(Adw.Application):
         self.set_accels_for_action("win.next_day", ['<alt>Right', '<alt>bracketright'])
         self.set_accels_for_action("win.zoom_in", ['<control>plus', '<control>equal'])
         self.set_accels_for_action("win.zoom_out", ['<control>minus'])
+
+    def do_startup(self):
+        super().do_startup()
+        self._load_css()
+
+    def _load_css(self):
+        provider = Gtk.CssProvider()
+        try:
+            provider.load_from_resource('/tech/redfoxlabs/Pianola/style.css')
+        except Exception:
+            css_path = os.path.join(os.path.dirname(__file__), 'style.css')
+            if os.path.exists(css_path):
+                provider.load_from_path(css_path)
+        display = Gdk.Display.get_default()
+        if display:
+            Gtk.StyleContext.add_provider_for_display(
+                display,
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
 
     def do_activate(self):
         win = self.props.active_window

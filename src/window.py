@@ -10,6 +10,7 @@ import os
 import tempfile
 from datetime import datetime
 from typing import Optional, List
+from gettext import gettext as _
 
 from gi.repository import Adw, Gtk, Gio, Gdk, GLib
 
@@ -36,6 +37,7 @@ class PianolaWindow(Adw.ApplicationWindow):
     keyboard_container = Gtk.Template.Child()
     btn_prev_day = Gtk.Template.Child()
     btn_next_day = Gtk.Template.Child()
+    btn_menu = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -76,11 +78,79 @@ class PianolaWindow(Adw.ApplicationWindow):
         # Register window actions
         self._setup_actions()
 
+        # Setup Theme Selector inside Primary Menu Popover
+        self._setup_theme_selector()
+
+        # Connect style manager dark notification for light/dark Cairo repaints
+        style_mgr = Adw.StyleManager.get_default()
+        style_mgr.connect("notify::dark", self._on_style_dark_changed)
+
         # Add hardware-synchronized VSync tick callback
         self.canvas.add_tick_callback(self._on_ui_tick)
 
         # Auto-discover Midikeep archive on launch
         self.load_archive()
+
+    def _setup_theme_selector(self):
+        popover = self.btn_menu.get_popover()
+        if popover:
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+            box.set_halign(Gtk.Align.CENTER)
+            box.set_margin_top(6)
+            box.set_margin_bottom(6)
+            box.set_margin_start(12)
+            box.set_margin_end(12)
+            box.add_css_class("theme-selector")
+
+            style_mgr = Adw.StyleManager.get_default()
+
+            btn_system = Gtk.CheckButton()
+            btn_system.add_css_class("follow")
+            btn_system.set_tooltip_text(_("Follow System Style"))
+
+            btn_light = Gtk.CheckButton()
+            btn_light.add_css_class("light")
+            btn_light.set_tooltip_text(_("Light Style"))
+            btn_light.set_group(btn_system)
+
+            btn_dark = Gtk.CheckButton()
+            btn_dark.add_css_class("dark")
+            btn_dark.set_tooltip_text(_("Dark Style"))
+            btn_dark.set_group(btn_system)
+
+            # Sync initial state
+            curr_scheme = style_mgr.get_color_scheme()
+            if curr_scheme == Adw.ColorScheme.FORCE_LIGHT:
+                btn_light.set_active(True)
+            elif curr_scheme == Adw.ColorScheme.FORCE_DARK:
+                btn_dark.set_active(True)
+            else:
+                btn_system.set_active(True)
+
+            def _on_theme_toggled(btn):
+                if not btn.get_active():
+                    return
+                if btn == btn_system:
+                    style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
+                elif btn == btn_light:
+                    style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+                elif btn == btn_dark:
+                    style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+
+            btn_system.connect("toggled", _on_theme_toggled)
+            btn_light.connect("toggled", _on_theme_toggled)
+            btn_dark.connect("toggled", _on_theme_toggled)
+
+            box.append(btn_system)
+            box.append(btn_light)
+            box.append(btn_dark)
+
+            popover.add_child(box, "theme_selector")
+
+    def _on_style_dark_changed(self, *args):
+        self.canvas.queue_draw()
+        self.minimap.queue_draw()
+        self.keyboard.queue_draw()
 
     def _setup_actions(self):
         actions = [

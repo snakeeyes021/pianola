@@ -19,7 +19,7 @@ import math
 from datetime import datetime
 from typing import List, Optional, Tuple, Callable
 import cairo
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, Adw
 
 from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData
 from .player import AudioPlayer
@@ -453,6 +453,13 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     # --- Cairo Drawing ---
 
+    @property
+    def is_dark(self) -> bool:
+        try:
+            return Adw.StyleManager.get_default().get_dark()
+        except Exception:
+            return True
+
     def _get_global_pitch_bounds(self) -> Tuple[int, int, int]:
         all_notes = [n for item in self.session_items for n in item.midi_data.notes]
         if all_notes:
@@ -467,6 +474,7 @@ class TimelineCanvas(Gtk.DrawingArea):
     def _draw_pitch_grid(self, cr: cairo.Context, width: int, roll_top: float, roll_bottom: float, roll_h: float):
         min_p, max_p, pitch_range = self._get_global_pitch_bounds()
         lane_h = (roll_h - 10.0) / pitch_range
+        is_dark = self.is_dark
 
         for p in range(min_p, max_p + 1):
             norm_p = (p - min_p) / pitch_range
@@ -474,13 +482,19 @@ class TimelineCanvas(Gtk.DrawingArea):
 
             is_black = (p % 12) in (1, 3, 6, 8, 10)
             if is_black:
-                cr.set_source_rgba(0.08, 0.08, 0.09, 0.6)
+                if is_dark:
+                    cr.set_source_rgba(0.08, 0.08, 0.09, 0.6)
+                else:
+                    cr.set_source_rgba(0.90, 0.90, 0.93, 0.75)
                 cr.rectangle(0, y - (lane_h / 2.0), width, lane_h)
                 cr.fill()
 
             if p == 60:
                 # Middle C (C4 = 60) highlight guide line across piano roll
-                cr.set_source_rgba(0.25, 0.65, 0.95, 0.45)
+                if is_dark:
+                    cr.set_source_rgba(0.25, 0.65, 0.95, 0.45)
+                else:
+                    cr.set_source_rgba(0.12, 0.48, 0.85, 0.60)
                 cr.set_line_width(1.2)
                 cr.set_dash([4.0, 4.0])
                 cr.move_to(0, y)
@@ -489,7 +503,10 @@ class TimelineCanvas(Gtk.DrawingArea):
                 cr.set_dash([])
             elif p % 12 == 0:
                 # Other C octave guide lines
-                cr.set_source_rgba(0.4, 0.4, 0.45, 0.22)
+                if is_dark:
+                    cr.set_source_rgba(0.4, 0.4, 0.45, 0.22)
+                else:
+                    cr.set_source_rgba(0.70, 0.70, 0.76, 0.55)
                 cr.set_line_width(0.8)
                 cr.set_dash([2.0, 4.0])
                 cr.move_to(0, y)
@@ -506,8 +523,12 @@ class TimelineCanvas(Gtk.DrawingArea):
             self.hadj.set_page_size(viewport_w)
 
         scroll_x = self.hadj.get_value()
+        is_dark = self.is_dark
 
-        cr.set_source_rgb(0.12, 0.12, 0.13)
+        if is_dark:
+            cr.set_source_rgb(0.12, 0.12, 0.13)
+        else:
+            cr.set_source_rgb(0.96, 0.96, 0.97)
         cr.paint()
 
         roll_top = self.HEADER_HEIGHT
@@ -532,14 +553,23 @@ class TimelineCanvas(Gtk.DrawingArea):
 
             # Session background tint
             if item.session.is_live:
-                cr.set_source_rgba(0.25, 0.12, 0.12, 0.4)
+                if is_dark:
+                    cr.set_source_rgba(0.25, 0.12, 0.12, 0.4)
+                else:
+                    cr.set_source_rgba(1.0, 0.88, 0.88, 0.5)
             else:
-                cr.set_source_rgba(0.16, 0.16, 0.18, 0.5)
+                if is_dark:
+                    cr.set_source_rgba(0.16, 0.16, 0.18, 0.5)
+                else:
+                    cr.set_source_rgba(0.92, 0.92, 0.94, 0.6)
             cr.rectangle(item_x, roll_top, item_w, roll_h)
             cr.fill()
 
             # Session boundary line
-            cr.set_source_rgba(0.3, 0.3, 0.35, 0.8)
+            if is_dark:
+                cr.set_source_rgba(0.3, 0.3, 0.35, 0.8)
+            else:
+                cr.set_source_rgba(0.75, 0.75, 0.80, 0.8)
             cr.set_line_width(1.0)
             cr.move_to(item_x, 0)
             cr.line_to(item_x, height)
@@ -570,7 +600,10 @@ class TimelineCanvas(Gtk.DrawingArea):
                     vel_ratio = max(0.2, min(1.0, n.velocity / 127.0))
 
                     # 1. Solid bar: Actual played finger-held note
-                    cr.set_source_rgba(0.15 * vel_ratio, 0.65 * vel_ratio, 0.95 * vel_ratio, 0.9)
+                    if is_dark:
+                        cr.set_source_rgba(0.15 * vel_ratio, 0.65 * vel_ratio, 0.95 * vel_ratio, 0.9)
+                    else:
+                        cr.set_source_rgba(0.10 * vel_ratio, 0.45 * vel_ratio, 0.88 * vel_ratio, 0.95)
                     cr.rectangle(nx, ny, key_w, 5.0)
                     cr.fill()
 
@@ -581,12 +614,18 @@ class TimelineCanvas(Gtk.DrawingArea):
                         tail_w = max(2.0, pedal_x - key_x)
 
                         # Distinct soft sky-blue / lavender pedal color
-                        cr.set_source_rgba(0.35, 0.85, 0.75, 0.45)
+                        if is_dark:
+                            cr.set_source_rgba(0.35, 0.85, 0.75, 0.45)
+                        else:
+                            cr.set_source_rgba(0.18, 0.68, 0.60, 0.40)
                         cr.rectangle(key_x, ny + 0.5, tail_w, 4.0)
                         cr.fill()
 
                         # Subtle dashed border for pedal extension
-                        cr.set_source_rgba(0.4, 0.9, 0.8, 0.8)
+                        if is_dark:
+                            cr.set_source_rgba(0.4, 0.9, 0.8, 0.8)
+                        else:
+                            cr.set_source_rgba(0.20, 0.75, 0.65, 0.85)
                         cr.set_line_width(0.8)
                         cr.set_dash([2.0, 2.0])
                         cr.rectangle(key_x, ny + 0.5, tail_w, 4.0)
@@ -614,12 +653,18 @@ class TimelineCanvas(Gtk.DrawingArea):
             gw = max(6.0, gx2 - gx1)
 
             # Shaded fold region
-            cr.set_source_rgba(0.1, 0.1, 0.12, 0.85)
+            if is_dark:
+                cr.set_source_rgba(0.1, 0.1, 0.12, 0.85)
+            else:
+                cr.set_source_rgba(0.88, 0.88, 0.91, 0.85)
             cr.rectangle(gx1, roll_top, gw, roll_h)
             cr.fill()
 
             # Diagonal fold slashes (//)
-            cr.set_source_rgba(0.45, 0.5, 0.55, 0.6)
+            if is_dark:
+                cr.set_source_rgba(0.45, 0.5, 0.55, 0.6)
+            else:
+                cr.set_source_rgba(0.55, 0.58, 0.62, 0.7)
             cr.set_line_width(1.5)
             # Left slash
             cr.move_to(gx1 + 2.0, roll_top + 4.0)
@@ -639,7 +684,10 @@ class TimelineCanvas(Gtk.DrawingArea):
 
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(9.0)
-            cr.set_source_rgba(0.55, 0.6, 0.65, 0.8)
+            if is_dark:
+                cr.set_source_rgba(0.55, 0.6, 0.65, 0.8)
+            else:
+                cr.set_source_rgba(0.35, 0.38, 0.42, 0.9)
             mid_x = (gx1 + gx2) / 2.0
             cr.move_to(mid_x - 18.0, roll_top + (roll_h / 2.0) + 3.0)
             cr.show_text(p_text)
@@ -697,7 +745,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.move_to(x + 6.0, 20.0 + y_offset)
         cr.show_text(star_char)
 
-        cr.set_source_rgb(0.85, 0.85, 0.88)
+        if self.is_dark:
+            cr.set_source_rgb(0.85, 0.85, 0.88)
+        else:
+            cr.set_source_rgb(0.15, 0.15, 0.18)
         cr.set_font_size(10.5)
 
         # Adaptive text depending on available horizontal space
@@ -716,7 +767,10 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.show_text(badge)
 
         if w >= 140.0 and tier == 0:
-            cr.set_source_rgb(0.6, 0.6, 0.65)
+            if self.is_dark:
+                cr.set_source_rgb(0.6, 0.6, 0.65)
+            else:
+                cr.set_source_rgb(0.45, 0.45, 0.50)
             cr.set_font_size(9.5)
             stats = f"{int(item.duration)}s • {item.session.note_count} notes"
             cr.move_to(x + 22.0, 32.0)
@@ -743,9 +797,23 @@ class TimelineCanvas(Gtk.DrawingArea):
 
     def _draw_footer_ruler(self, cr: cairo.Context, width: int, height: int, scroll_x: float):
         ruler_y = height - self.FOOTER_HEIGHT
-        cr.set_source_rgb(0.18, 0.18, 0.20)
+        is_dark = self.is_dark
+        if is_dark:
+            cr.set_source_rgb(0.18, 0.18, 0.20)
+        else:
+            cr.set_source_rgb(0.92, 0.92, 0.94)
         cr.rectangle(0, ruler_y, width, self.FOOTER_HEIGHT)
         cr.fill()
+
+        # Top border line
+        if is_dark:
+            cr.set_source_rgba(0.3, 0.3, 0.35, 0.8)
+        else:
+            cr.set_source_rgba(0.78, 0.78, 0.82, 0.8)
+        cr.set_line_width(1.0)
+        cr.move_to(0, ruler_y)
+        cr.line_to(width, ruler_y)
+        cr.stroke()
 
         # Dynamic step intervals (in seconds): 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600
         possible_steps = [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0]
@@ -755,7 +823,10 @@ class TimelineCanvas(Gtk.DrawingArea):
                 chosen_step = step
                 break
 
-        cr.set_source_rgb(0.55, 0.55, 0.60)
+        if is_dark:
+            cr.set_source_rgb(0.55, 0.55, 0.60)
+        else:
+            cr.set_source_rgb(0.40, 0.40, 0.45)
         cr.set_font_size(9.0)
         cr.set_line_width(1.0)
 
