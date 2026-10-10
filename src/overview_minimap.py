@@ -198,10 +198,25 @@ class OverviewMinimap(Gtk.DrawingArea):
                     cr.rectangle(nx, ny, nw, 1.5)
                 cr.fill()
 
-            # Starred pip
-            if item.session.starred:
-                cr.set_source_rgba(0.95, 0.80, 0.20, 0.9)
-                cr.arc(sx + 5.0, 6.0, 2.5, 0, 2 * 3.14159)
+            # Flag markers / Starred pips at exact temporal positions
+            markers = item.midi_data.markers
+            if markers:
+                for m in markers:
+                    mx = (self.canvas.time_to_x(item.timeline_offset + m.time) - day_start_cx) * scale
+                    # Gold pip at exact marker position
+                    cr.set_source_rgba(0.96, 0.78, 0.22, 0.95)
+                    cr.arc(mx, 5.0, 2.5, 0, 2 * 3.14159)
+                    cr.fill()
+
+                    # Tiny 1px vertical pin/tick mark extending down into the roll
+                    cr.set_line_width(1.0)
+                    cr.move_to(mx, 7.5)
+                    cr.line_to(mx, 12.0)
+                    cr.stroke()
+            elif item.session.starred:
+                # Fallback starred pip at clip start if session is starred without specific markers
+                cr.set_source_rgba(0.96, 0.78, 0.22, 0.95)
+                cr.arc(sx + 5.0, 5.0, 2.5, 0, 2 * 3.14159)
                 cr.fill()
 
         # 3. Translucent Viewport Lens (active scroll view)

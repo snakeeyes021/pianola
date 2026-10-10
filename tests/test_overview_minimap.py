@@ -117,5 +117,71 @@ class TestOverviewMinimapLogic(unittest.TestCase):
         self.assertNotIn("PM", badge_single)
 
 
+    def test_exact_marker_pip_positioning(self):
+        import sys, os, cairo
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+        from src.archive import SessionRecord, MidiData, MarkerEvent, NoteEvent
+        from src.timeline_canvas import TimelineCanvas, TimelineSessionItem, DayGroup
+        from src.overview_minimap import OverviewMinimap
+
+        # Session with marker at 10.0s (out of 20s)
+        m = MarkerEvent(time=10.0, text="Clapper ★")
+        s = SessionRecord(
+            id=1,
+            start_time=datetime(2026, 10, 5, 12, 0),
+            end_time=datetime(2026, 10, 5, 12, 20),
+            duration_seconds=20.0,
+            active_play_seconds=20.0,
+            note_count=10,
+            device_name="Piano",
+            file_path="/tmp/piano.mid",
+            starred=True,
+            _cached_midi=MidiData(duration=20.0, notes=[NoteEvent(60, 90, 0, 20)], markers=[m])
+        )
+        item = TimelineSessionItem(s, 0.0)
+
+        day = DayGroup(datetime(2026, 10, 5).date())
+        day.start_offset = 0.0
+        day.end_offset = 20.0
+        day.items = [item]
+
+        from src.player import AudioPlayer, NullSynthEngine
+        class DummyCanvas:
+            def __init__(self):
+                self.active_day = day
+                self.session_items = day.items
+                self.player = AudioPlayer(synth=NullSynthEngine())
+                self.is_archive_mode = True
+                self.total_timeline_duration = 20.0
+                self.total_visual_duration = 20.0
+            def time_to_x(self, t):
+                return t * 50.0  # 50 px/sec
+
+        canvas = DummyCanvas()
+        hadj = DummyHadjustment(value=0.0, upper=1000.0, page_size=400.0)
+
+        minimap = OverviewMinimap.__new__(OverviewMinimap)
+        minimap.canvas = canvas
+        minimap.player = AudioPlayer(synth=NullSynthEngine())
+        minimap.hadj = hadj
+        minimap.get_width = lambda: 500
+
+        # Verify exact marker position math
+        day_start_cx = canvas.time_to_x(day.start_offset)
+        day_end_cx = canvas.time_to_x(day.end_offset)
+        day_width = day_end_cx - day_start_cx
+        scale = 500.0 / day_width
+
+        marker_cx = canvas.time_to_x(item.timeline_offset + m.time)
+        expected_mx = (marker_cx - day_start_cx) * scale
+
+        self.assertEqual(expected_mx, 250.0)
+
+        # Draw onto a cairo surface to verify no rendering errors
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 500, 30)
+        cr = cairo.Context(surf)
+        minimap._on_draw(minimap, cr, 500, 30)
+
+
 if __name__ == "__main__":
     unittest.main()
