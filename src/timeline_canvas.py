@@ -120,6 +120,12 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.on_selection_changed: Optional[Callable[[Optional[Tuple[float, float]]], None]] = None
         self.on_request_drag_content: Optional[Callable[..., Any]] = None
 
+        # Hover expansion states for header labels and marker flags
+        self.hovered_header_item: Optional[TimelineSessionItem] = None
+        self.hovered_marker: Optional[Tuple[TimelineSessionItem, MarkerEvent]] = None
+        self._rendered_headers: List[dict] = []
+        self._rendered_markers: List[dict] = []
+
         # Configuration
         self.hadj = Gtk.Adjustment.new(0.0, 0.0, 1000.0, 25.0, 200.0, 800.0)
         self.hadj.connect("value-changed", lambda *_: self.queue_draw())
@@ -586,17 +592,39 @@ class TimelineCanvas(Gtk.DrawingArea):
             return
 
         is_grabbable = False
+        hover_marker = None
+        hover_header = None
+
         if self.selection_range:
             s_start, s_end = self.selection_range
             if s_start <= t <= s_end and y > self.HEADER_HEIGHT:
                 is_grabbable = True
         elif y <= self.HEADER_HEIGHT:
-            for item in self.session_items:
-                if item.timeline_offset <= t <= item.end_timeline_offset:
-                    is_grabbable = True
+            # Check markers (flags) first
+            for rm in self._rendered_markers:
+                if rm["rect_x"] <= world_x <= rm["rect_x"] + rm["rect_w"] and rm["rect_y"] <= y <= rm["rect_y"] + rm["rect_h"]:
+                    hover_marker = (rm["item"], rm["marker"])
                     break
 
-        if is_grabbable:
+            if hover_marker is None:
+                # Check session headers
+                for rh in self._rendered_headers:
+                    if rh["rect_x"] <= world_x <= rh["rect_x"] + rh["rect_w"] and 0.0 <= y <= self.HEADER_HEIGHT:
+                        hover_header = rh["item"]
+                        is_grabbable = True
+                        break
+
+        need_redraw = False
+        if hover_marker != self.hovered_marker:
+            self.hovered_marker = hover_marker
+            need_redraw = True
+        if hover_header != self.hovered_header_item:
+            self.hovered_header_item = hover_header
+            need_redraw = True
+
+        if hover_marker is not None:
+            self.set_cursor_from_name("pointer")
+        elif is_grabbable:
             self.set_cursor_from_name("grab")
         else:
             self.set_cursor_from_name("default")
@@ -604,14 +632,24 @@ class TimelineCanvas(Gtk.DrawingArea):
         if self.scrub_active:
             self.scrub_cursor_time = t
             self.player.audit_at(t)
+            need_redraw = True
+
+        if need_redraw:
             self.queue_draw()
 
     def _on_motion_leave(self, controller):
         self.set_cursor_from_name("default")
+        need_redraw = False
+        if self.hovered_marker is not None or self.hovered_header_item is not None:
+            self.hovered_marker = None
+            self.hovered_header_item = None
+            need_redraw = True
         if self.scrub_active:
             self.scrub_active = False
             self.scrub_cursor_time = None
             self.player.end_scrub()
+            need_redraw = True
+        if need_redraw:
             self.queue_draw()
 
     def _on_click_pressed(self, gesture, n_press, x, y):
@@ -638,7 +676,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         if y <= self.HEADER_HEIGHT:
             for item in self.session_items:
                 item_x = self.time_to_x(item.timeline_offset)
-                if item_x + 4 <= world_x <= item_x + 28 and 8 <= y <= 32:
+                if item_x + 2.0 <= world_x <= item_x + 22.0 and 4.0 <= y <= 26.0:
                     new_star = not item.session.starred
                     item.session.starred = new_star
                     if self.on_star_toggled:
@@ -646,12 +684,11 @@ class TimelineCanvas(Gtk.DrawingArea):
                     self.queue_draw()
                     return
 
-                for m in item.midi_data.markers:
-                    mx = self.time_to_x(item.timeline_offset + m.time)
-                    if abs(world_x - mx) <= 12:
-                        self.player.seek(item.timeline_offset + m.time)
-                        self.queue_draw()
-                        return
+            for rm in self._rendered_markers:
+                if rm["rect_x"] <= world_x <= rm["rect_x"] + rm["rect_w"] and rm["rect_y"] <= y <= rm["rect_y"] + rm["rect_h"]:
+                    self.player.seek(rm["item"].timeline_offset + rm["marker"].time)
+                    self.queue_draw()
+                    return
 
             for item in self.session_items:
                 if item.timeline_offset <= t <= item.end_timeline_offset:
@@ -940,10 +977,22 @@ class TimelineCanvas(Gtk.DrawingArea):
         cr.translate(-scroll_x, 0.0)
 
         # 1. Draw sessions and notes
-        last_header_x = -999.0
-        header_tier = 0
-        for item in self.session_items:
-            item_x = self.time_to_x(item.timeline_offset)
+        self._rendered_headers.clear()
+        self._rendered_markers.clear()
+
+        session_starts = [self.time_to_x(it.timeline_offset) for it in self.session_items]
+        all_markers_info = []
+        for it in self.session_items:
+            for m in it.midi_data.markers:
+                mx = self.time_to_x(it.timeline_offset + m.time)
+                all_markers_info.append((it, m, mx))
+        all_markers_info.sort(key=lambda info: info[2])
+        all_marker_xs = [info[2] for info in all_markers_info]
+
+        timeline_end_x = max(self.total_visual_duration * self.px_per_sec, 800.0)
+
+        for idx, item in enumerate(self.session_items):
+            item_x = session_starts[idx]
             item_end_x = self.time_to_x(item.end_timeline_offset)
             item_w = max(4.0, item_end_x - item_x)
 
@@ -971,14 +1020,32 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.line_to(item_x, height)
             cr.stroke()
 
-            # Session Header badge with collision tiering
-            if item_x - last_header_x < 110.0:
-                header_tier = 1 - header_tier
+            # Session Header badge - bounded strictly up to next clip or segment
+            if idx + 1 < len(self.session_items):
+                next_session_x = session_starts[idx + 1]
             else:
-                header_tier = 0
-            last_header_x = item_x
+                next_session_x = max(item_end_x, timeline_end_x)
 
-            self._draw_session_header(cr, item, item_x, item_w, tier=header_tier)
+            avail_w = max(0.0, next_session_x - item_x - 6.0)
+            has_marker_collision = any(item_x <= mx <= item_x + 130.0 for mx in all_marker_xs)
+
+            is_collapsed, full_badge, stats = self._draw_session_header(
+                cr, item, item_x, avail_w, has_marker_collision=has_marker_collision
+            )
+
+            self._rendered_headers.append({
+                "item": item,
+                "x": item_x,
+                "w": item_w,
+                "avail_w": avail_w,
+                "is_collapsed": is_collapsed,
+                "full_badge": full_badge,
+                "stats": stats,
+                "rect_x": item_x,
+                "rect_y": 0.0,
+                "rect_w": max(avail_w, 24.0),
+                "rect_h": self.HEADER_HEIGHT
+            })
 
             # Draw Notes & Pedal Tails
             notes = item.midi_data.notes
@@ -1031,19 +1098,30 @@ class TimelineCanvas(Gtk.DrawingArea):
                         cr.stroke()
                         cr.set_dash([])
 
-            # Clapper Marker Chips with collision tiering
-            last_marker_x = -999.0
-            marker_tier = 0
+            # Clapper Marker Chips (flags) - freely display text up until next obstacle
             for m in item.midi_data.markers:
                 mx = self.time_to_x(item.timeline_offset + m.time)
-                if abs(mx - last_marker_x) < 45.0:
-                    marker_tier = 1 - marker_tier
-                else:
-                    marker_tier = 0
-                last_marker_x = mx
+                next_obstacles = [x for x in all_marker_xs if x > mx + 1.0] + [x for x in session_starts if x > mx + 1.0] + [timeline_end_x]
+                next_obs = min(next_obstacles)
+                avail_flag_w = max(18.0, next_obs - mx - 4.0)
 
-                chip_y = roll_top - 14.0 if marker_tier == 0 else roll_top - 28.0
-                self._draw_marker_chip(cr, m.text, mx, chip_y)
+                chip_w, flag_collapsed, display_text = self._draw_marker_chip(cr, m.text, mx, avail_flag_w)
+
+                self._rendered_markers.append({
+                    "item": item,
+                    "marker": m,
+                    "x": mx,
+                    "chip_y": 23.0,
+                    "chip_w": chip_w,
+                    "avail_w": avail_flag_w,
+                    "is_collapsed": flag_collapsed,
+                    "display_text": display_text,
+                    "full_text": m.text,
+                    "rect_x": mx - 2.0,
+                    "rect_y": 18.0,
+                    "rect_w": chip_w + 4.0,
+                    "rect_h": 24.0
+                })
 
         # Instrument Track HUD Watermarks in Multi-Track Mode
         if self.multi_track_mode and len(self.tracks) > 1:
@@ -1178,6 +1256,17 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.line_to(ox + 5.0, oy + 4.0)
             cr.stroke()
 
+        # 6. Hover Expansion Tooltip Overlays (highest z-order with opaque background)
+        if self.hovered_marker is not None:
+            hit_rm = next((rm for rm in self._rendered_markers if rm["item"] == self.hovered_marker[0] and rm["marker"] == self.hovered_marker[1]), None)
+            if hit_rm is not None and hit_rm["is_collapsed"]:
+                self._draw_expanded_marker_tooltip(cr, hit_rm, scroll_x, width)
+
+        elif self.hovered_header_item is not None:
+            hit_rh = next((rh for rh in self._rendered_headers if rh["item"] == self.hovered_header_item), None)
+            if hit_rh is not None and hit_rh["is_collapsed"]:
+                self._draw_expanded_header_tooltip(cr, hit_rh, scroll_x, width)
+
     def get_session_badge_text(self, item: TimelineSessionItem, w: float) -> str:
         """Return session header badge label. In archive mode includes date/time; in single-file mode only device/file name."""
         if self.is_archive_mode:
@@ -1198,55 +1287,251 @@ class TimelineCanvas(Gtk.DrawingArea):
                 badge = badge[:12] + "…"
             return badge
 
-    def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float, tier: int = 0):
-        star_char = "★" if item.session.starred else "☆"
-        cr.set_source_rgb(0.95, 0.75, 0.15) if item.session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
-        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        cr.set_font_size(13.0)
+    def _round_rect(self, cr: cairo.Context, x: float, y: float, w: float, h: float, r: float):
+        """Cairo helper to create a rounded rectangle subpath."""
+        r = min(r, w / 2.0, h / 2.0)
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
 
-        y_offset = 0.0 if tier == 0 else 16.0
-        cr.move_to(x + 6.0, 20.0 + y_offset)
-        cr.show_text(star_char)
+    def _fit_text_to_width(self, cr: cairo.Context, text: str, max_w: float) -> Tuple[str, bool]:
+        """
+        Fit text within max_w using binary search on character length with ellipsis.
+        Returns (fitted_text, was_truncated).
+        """
+        if max_w <= 0.0 or not text:
+            return ("", bool(text))
 
-        if self.is_dark:
-            cr.set_source_rgb(0.85, 0.85, 0.88)
+        if cr.text_extents(text).x_advance <= max_w:
+            return (text, False)
+
+        ellipsis = "…"
+        if cr.text_extents(ellipsis).x_advance > max_w:
+            return ("", True)
+
+        low = 0
+        high = len(text)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            cand = text[:mid] + ellipsis
+            if cr.text_extents(cand).x_advance <= max_w:
+                best = cand
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        return (best if best else ellipsis, True)
+
+    def get_full_session_badge_text(self, item: TimelineSessionItem) -> str:
+        """Return the unclipped, complete session header badge text."""
+        if self.is_archive_mode:
+            date_str = item.session.start_time.strftime("%b %-d, %-I:%M %p")
+            badge = f"{date_str} • {item.session.device_name}"
+            if item.session.is_live:
+                badge = f"[LIVE] {badge}"
+            return badge
         else:
-            cr.set_source_rgb(0.15, 0.15, 0.18)
+            return item.session.device_name
+
+    def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, avail_w: float, has_marker_collision: bool = False, tier: int = 0) -> Tuple[bool, str, str]:
+        """Draw session header bounded strictly by avail_w so it never exceeds the start of the next clip."""
+        full_badge = self.get_full_session_badge_text(item)
+        stats = f"{int(item.duration)}s • {item.session.note_count} notes"
+
+        # Star icon
+        if avail_w >= 14.0:
+            star_char = "★" if item.session.starred else "☆"
+            cr.set_source_rgb(0.95, 0.75, 0.15) if item.session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(13.0)
+            cr.move_to(x + 4.0, 18.0)
+            cr.show_text(star_char)
+
+        # Title text
+        is_collapsed = False
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(10.5)
+        max_title_w = max(0.0, avail_w - 22.0)
+        fitted_title, was_truncated = self._fit_text_to_width(cr, full_badge, max_title_w)
+        if was_truncated or max_title_w <= 0.0:
+            is_collapsed = True
 
-        badge = self.get_session_badge_text(item, w)
-
-        cr.move_to(x + 22.0, 19.0 + y_offset)
-        cr.show_text(badge)
-
-        if w >= 140.0 and tier == 0:
+        if fitted_title and max_title_w > 0.0:
             if self.is_dark:
-                cr.set_source_rgb(0.6, 0.6, 0.65)
+                cr.set_source_rgb(0.85, 0.85, 0.88)
+            else:
+                cr.set_source_rgb(0.15, 0.15, 0.18)
+            cr.move_to(x + 22.0, 17.5)
+            cr.show_text(fitted_title)
+
+        # Secondary stats row (only if wide enough and not colliding with markers)
+        show_stats = (avail_w >= 140.0 and not has_marker_collision)
+        if show_stats:
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(9.0)
+            if self.is_dark:
+                cr.set_source_rgb(0.60, 0.60, 0.65)
             else:
                 cr.set_source_rgb(0.45, 0.45, 0.50)
-            cr.set_font_size(9.5)
-            stats = f"{int(item.duration)}s • {item.session.note_count} notes"
-            cr.move_to(x + 22.0, 32.0)
+            cr.move_to(x + 22.0, 31.0)
             cr.show_text(stats)
+        else:
+            is_collapsed = True
 
-    def _draw_marker_chip(self, cr: cairo.Context, text: str, x: float, y: float):
-        cr.set_source_rgba(0.2, 0.45, 0.3, 0.9)
-        chip_w = min(80.0, max(24.0, len(text) * 6.5 + 8.0))
-        cr.rectangle(x - 4.0, y - 10.0, chip_w, 15.0)
-        cr.fill()
+        return is_collapsed, full_badge, stats
 
-        cr.set_source_rgba(0.3, 0.8, 0.4, 0.9)
-        cr.set_line_width(1.0)
-        cr.move_to(x, y + 5.0)
-        cr.line_to(x, self.HEADER_HEIGHT + 40.0)
-        cr.stroke()
+    def _draw_marker_chip(self, cr: cairo.Context, text: str, x: float, avail_w: float = 200.0, y: Optional[float] = None) -> Tuple[float, bool, str]:
+        """Draw marker chip freely displaying text up until next obstacle (avail_w)."""
+        chip_y = y if y is not None else 23.0
+        chip_h = 15.0
 
-        cr.set_source_rgb(1.0, 1.0, 1.0)
         cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
         cr.set_font_size(9.0)
-        cr.move_to(x, y + 2.0)
-        label = text if len(text) <= 12 else text[:10] + "…"
-        cr.show_text(label)
+        ext = cr.text_extents(text)
+        needed_w = ext.x_advance + 14.0
+
+        if needed_w <= avail_w:
+            chip_w = max(24.0, needed_w)
+            display_text = text
+            is_collapsed = False
+        else:
+            chip_w = max(18.0, avail_w)
+            max_text_w = max(0.0, chip_w - 10.0)
+            display_text, _ = self._fit_text_to_width(cr, text, max_text_w)
+            is_collapsed = True
+
+        # Background pill
+        if self.is_dark:
+            cr.set_source_rgba(0.18, 0.45, 0.30, 0.92)
+        else:
+            cr.set_source_rgba(0.22, 0.52, 0.36, 0.92)
+        self._round_rect(cr, x - 2.0, chip_y, chip_w, chip_h, 3.5)
+        cr.fill()
+
+        # Border
+        cr.set_source_rgba(0.35, 0.85, 0.55, 0.85)
+        cr.set_line_width(1.0)
+        self._round_rect(cr, x - 2.0, chip_y, chip_w, chip_h, 3.5)
+        cr.stroke()
+
+        # Stem line down into piano roll
+        cr.set_source_rgba(0.30, 0.80, 0.45, 0.70)
+        cr.set_line_width(1.0)
+        cr.move_to(x, chip_y + chip_h)
+        cr.line_to(x, self.HEADER_HEIGHT + 35.0)
+        cr.stroke()
+
+        # Text inside chip
+        if display_text:
+            cr.set_source_rgb(1.0, 1.0, 1.0)
+            cr.move_to(x + 3.0, chip_y + 11.0)
+            cr.show_text(display_text)
+
+        return chip_w, is_collapsed, display_text
+
+    def _draw_expanded_header_tooltip(self, cr: cairo.Context, rh: dict, scroll_x: float, screen_width: int):
+        """Draw floating expanded card with opaque background clearing collided content."""
+        full_badge = rh['full_badge']
+        stats = rh['stats']
+        star_char = "★" if rh['item'].session.starred else "☆"
+
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(10.5)
+        badge_w = cr.text_extents(full_badge).x_advance
+
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(9.0)
+        stats_w = cr.text_extents(stats).x_advance
+
+        content_w = max(badge_w + 32.0, stats_w + 32.0, 110.0)
+        card_w = content_w + 16.0
+        card_h = 36.0
+        card_y = 4.0
+
+        screen_x = rh['x'] - scroll_x
+        card_x = max(6.0, min(screen_x, screen_width - card_w - 6.0))
+
+        # Opaque background card
+        if self.is_dark:
+            cr.set_source_rgba(0.12, 0.13, 0.16, 0.98)
+        else:
+            cr.set_source_rgba(0.98, 0.98, 1.0, 0.98)
+        self._round_rect(cr, card_x, card_y, card_w, card_h, 6.0)
+        cr.fill()
+
+        # Border
+        if self.is_dark:
+            cr.set_source_rgba(0.40, 0.45, 0.55, 0.90)
+        else:
+            cr.set_source_rgba(0.65, 0.68, 0.75, 0.90)
+        cr.set_line_width(1.0)
+        self._round_rect(cr, card_x, card_y, card_w, card_h, 6.0)
+        cr.stroke()
+
+        # Star
+        cr.set_source_rgb(0.95, 0.75, 0.15) if rh['item'].session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(13.0)
+        cr.move_to(card_x + 8.0, card_y + 16.0)
+        cr.show_text(star_char)
+
+        # Title
+        if self.is_dark:
+            cr.set_source_rgb(0.92, 0.92, 0.95)
+        else:
+            cr.set_source_rgb(0.12, 0.12, 0.15)
+        cr.set_font_size(10.5)
+        cr.move_to(card_x + 24.0, card_y + 15.0)
+        cr.show_text(full_badge)
+
+        # Stats
+        if self.is_dark:
+            cr.set_source_rgb(0.65, 0.68, 0.75)
+        else:
+            cr.set_source_rgb(0.40, 0.42, 0.48)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(9.0)
+        cr.move_to(card_x + 24.0, card_y + 28.0)
+        cr.show_text(stats)
+
+    def _draw_expanded_marker_tooltip(self, cr: cairo.Context, rm: dict, scroll_x: float, screen_width: int):
+        """Draw floating expanded marker pill with opaque background clearing collided content."""
+        full_text = rm['full_text']
+        label_text = f"⚑  {full_text}"
+
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(9.5)
+        text_w = cr.text_extents(label_text).x_advance
+
+        card_w = max(text_w + 18.0, 60.0)
+        card_h = 20.0
+        card_y = rm['chip_y'] - 2.5
+
+        screen_x = rm['x'] - scroll_x
+        card_x = max(6.0, min(screen_x - 2.0, screen_width - card_w - 6.0))
+
+        # Opaque background pill
+        if self.is_dark:
+            cr.set_source_rgba(0.10, 0.35, 0.22, 0.98)
+        else:
+            cr.set_source_rgba(0.15, 0.42, 0.28, 0.98)
+        self._round_rect(cr, card_x, card_y, card_w, card_h, 4.0)
+        cr.fill()
+
+        # Crisp glowing border
+        cr.set_source_rgba(0.40, 0.95, 0.60, 1.0)
+        cr.set_line_width(1.2)
+        self._round_rect(cr, card_x, card_y, card_w, card_h, 4.0)
+        cr.stroke()
+
+        # Text
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.move_to(card_x + 6.0, card_y + 14.0)
+        cr.show_text(label_text)
 
     def _draw_footer_ruler(self, cr: cairo.Context, width: int, height: int, scroll_x: float):
         ruler_y = height - self.FOOTER_HEIGHT
