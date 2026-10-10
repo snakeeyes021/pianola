@@ -370,7 +370,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         try:
             session = self.archive_mgr.load_single_file(filepath)
             self.view_stack.set_visible_child_name("timeline")
-            self.canvas.load_sessions([session])
+            self.canvas.load_sessions([session], is_archive_mode=False)
             self.player.set_multi_track_mode(self.btn_multi_track.get_active())
             self.canvas.jump_to_archive_start()
             self.scroll_to_time(0.0)

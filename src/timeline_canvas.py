@@ -19,6 +19,9 @@ import math
 from datetime import datetime
 from typing import List, Optional, Tuple, Callable
 import cairo
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
 from gi.repository import Gtk, Gdk, GLib, Adw
 
 from .archive import NoteEvent, MarkerEvent, Section, SessionRecord, MidiData, TrackInfo, get_track_color, get_gm_instrument_name
@@ -84,6 +87,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.total_timeline_duration: float = 0.0
         self.total_visual_duration: float = 0.0
         self.px_per_sec: float = self.DEFAULT_PX_PER_SEC
+        self.is_archive_mode: bool = True
         self.multi_track_mode: bool = False
         self.tracks: List[TrackInfo] = []
         self.day_groups: dict = {}
@@ -202,8 +206,9 @@ class TimelineCanvas(Gtk.DrawingArea):
 
         return lanes
 
-    def load_sessions(self, sessions: List[SessionRecord]):
+    def load_sessions(self, sessions: List[SessionRecord], is_archive_mode: bool = True):
         """Build continuous timeline with Silence Compacting spanning all sessions."""
+        self.is_archive_mode = is_archive_mode
         self.session_items.clear()
         self.day_groups.clear()
         self.ordered_days.clear()
@@ -1172,6 +1177,26 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.line_to(ox + 5.0, oy + 4.0)
             cr.stroke()
 
+    def get_session_badge_text(self, item: TimelineSessionItem, w: float) -> str:
+        """Return session header badge label. In archive mode includes date/time; in single-file mode only device/file name."""
+        if self.is_archive_mode:
+            if w >= 150.0:
+                date_str = item.session.start_time.strftime("%b %-d, %-I:%M %p")
+                badge = f"{date_str} • {item.session.device_name}"
+            elif w >= 65.0:
+                badge = item.session.start_time.strftime("%-I:%M %p")
+            else:
+                badge = item.session.start_time.strftime("%-I:%M")
+
+            if item.session.is_live:
+                badge = f"[LIVE] {badge}"
+            return badge
+        else:
+            badge = item.session.device_name
+            if w < 120.0 and len(badge) > 14:
+                badge = badge[:12] + "…"
+            return badge
+
     def _draw_session_header(self, cr: cairo.Context, item: TimelineSessionItem, x: float, w: float, tier: int = 0):
         star_char = "★" if item.session.starred else "☆"
         cr.set_source_rgb(0.95, 0.75, 0.15) if item.session.starred else cr.set_source_rgb(0.5, 0.5, 0.5)
@@ -1188,17 +1213,7 @@ class TimelineCanvas(Gtk.DrawingArea):
             cr.set_source_rgb(0.15, 0.15, 0.18)
         cr.set_font_size(10.5)
 
-        # Adaptive text depending on available horizontal space
-        if w >= 150.0:
-            date_str = item.session.start_time.strftime("%b %-d, %-I:%M %p")
-            badge = f"{date_str} • {item.session.device_name}"
-        elif w >= 65.0:
-            badge = item.session.start_time.strftime("%-I:%M %p")
-        else:
-            badge = item.session.start_time.strftime("%-I:%M")
-
-        if item.session.is_live:
-            badge = f"[LIVE] {badge}"
+        badge = self.get_session_badge_text(item, w)
 
         cr.move_to(x + 22.0, 19.0 + y_offset)
         cr.show_text(badge)

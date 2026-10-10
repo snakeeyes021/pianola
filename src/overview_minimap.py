@@ -13,6 +13,9 @@ interactive translucent viewport lens replacing the default horizontal scrollbar
 from typing import Optional
 import cairo
 
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
 from gi.repository import Gtk, Gdk, GLib, Adw
 from .player import AudioPlayer
 
@@ -123,6 +126,15 @@ class OverviewMinimap(Gtk.DrawingArea):
         self.canvas.queue_draw()
         self.queue_draw()
         return True
+
+    def get_day_watermark_label(self) -> Optional[str]:
+        """Return formatted date watermark string in archive mode, or None in single-file mode."""
+        if not getattr(self.canvas, "is_archive_mode", True):
+            return None
+        day = getattr(self.canvas, "active_day", None)
+        if day and getattr(day, "date", None):
+            return day.date.strftime("%A, %b %-d, %Y") if hasattr(day.date, "strftime") else str(day.date)
+        return None
 
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
         if width <= 0 or height <= 0:
@@ -235,9 +247,9 @@ class OverviewMinimap(Gtk.DrawingArea):
             cr.line_to(play_x, height)
             cr.stroke()
 
-        # Day title watermark
-        if day and day.date:
-            day_label = day.date.strftime("%A, %b %-d, %Y") if hasattr(day.date, "strftime") else str(day.date)
+        # Day title watermark (only in archive mode)
+        day_label = self.get_day_watermark_label()
+        if day_label:
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
             cr.set_font_size(9.0)
             if is_dark:

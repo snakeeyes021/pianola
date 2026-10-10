@@ -58,5 +58,64 @@ class TestOverviewMinimapLogic(unittest.TestCase):
         self.assertEqual(hadj.get_value(), 200.0)
 
 
+
+    def test_watermark_archive_vs_single_file_mode(self):
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+        from src.overview_minimap import OverviewMinimap
+
+        class DummyDay:
+            def __init__(self, d):
+                self.date = d
+
+        class DummyCanvas:
+            def __init__(self, is_archive: bool):
+                self.is_archive_mode = is_archive
+                self.active_day = DummyDay(datetime(2026, 10, 5).date())
+
+        minimap = OverviewMinimap.__new__(OverviewMinimap)
+
+        # Archive mode: should display formatted day label
+        minimap.canvas = DummyCanvas(is_archive=True)
+        self.assertEqual(minimap.get_day_watermark_label(), "Monday, Oct 5, 2026")
+
+        # Single-file mode: watermark must NOT be displayed
+        minimap.canvas = DummyCanvas(is_archive=False)
+        self.assertIsNone(minimap.get_day_watermark_label())
+
+    def test_single_file_mode_session_badge_omits_date(self):
+        import sys, os
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+        from src.archive import SessionRecord, MidiData
+        from src.timeline_canvas import TimelineCanvas, TimelineSessionItem
+
+        s = SessionRecord(
+            id=None,
+            start_time=datetime(2026, 10, 5, 14, 30),
+            end_time=datetime(2026, 10, 5, 14, 35),
+            duration_seconds=120.0,
+            active_play_seconds=60.0,
+            note_count=42,
+            device_name="my_recording.mid",
+            file_path="/tmp/my_recording.mid",
+            _cached_midi=MidiData(duration=120.0)
+        )
+        item = TimelineSessionItem(s, 0.0)
+        canvas = TimelineCanvas.__new__(TimelineCanvas)
+
+        # In archive mode: includes formatted date and time
+        canvas.is_archive_mode = True
+        badge_arch = canvas.get_session_badge_text(item, 200.0)
+        self.assertIn("Oct 5", badge_arch)
+        self.assertIn("my_recording.mid", badge_arch)
+
+        # In single file mode: must NOT include date or time
+        canvas.is_archive_mode = False
+        badge_single = canvas.get_session_badge_text(item, 200.0)
+        self.assertEqual(badge_single, "my_recording.mid")
+        self.assertNotIn("Oct 5", badge_single)
+        self.assertNotIn("PM", badge_single)
+
+
 if __name__ == "__main__":
     unittest.main()
