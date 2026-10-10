@@ -376,6 +376,7 @@ class AudioPlayer:
         # Periodic callback for UI updates: on_tick(current_time: float)
         self.on_tick: Optional[Callable[[float], None]] = None
         self.on_state_changed: Optional[Callable[[bool], None]] = None
+        self.on_playback_finished: Optional[Callable[[], None]] = None
 
         # Threading for playback timer
         self._stop_event = threading.Event()
@@ -621,6 +622,8 @@ class AudioPlayer:
                             self.on_state_changed(False)
                         if self.on_tick:
                             self.on_tick(self.current_time)
+                        if self.on_playback_finished:
+                            self.on_playback_finished()
                         break
 
                     # Dispatch mid-playback program changes only in multi-track mode

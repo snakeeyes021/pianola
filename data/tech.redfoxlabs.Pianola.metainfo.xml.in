@@ -40,6 +40,18 @@
   </branding>
 
   <releases>
+    <release version="0.1.1" date="2026-10-10">
+      <description>
+        <p>Day-scoped timeline scalability, seamless boundary crossing, and layout refinements:</p>
+        <ul>
+          <li>Day-scoped timeline canvas and layout for high-performance archive navigation</li>
+          <li>Seamless cross-day playback and section navigation across day boundaries</li>
+          <li>Collision-bounded clip headers and flag chips with hover expansion tooltips</li>
+          <li>Exact temporal flag marker positioning and tick marks on the overview minimap</li>
+          <li>Clean single-file mode header badges without archive date formatting</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-06">
       <description>
         <p>Initial release of Pianola:</p>

@@ -13,6 +13,9 @@ interactive translucent viewport lens replacing the default horizontal scrollbar
 from typing import Optional
 import cairo
 
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
 from gi.repository import Gtk, Gdk, GLib, Adw
 from .player import AudioPlayer
 
@@ -124,6 +127,15 @@ class OverviewMinimap(Gtk.DrawingArea):
         self.queue_draw()
         return True
 
+    def get_day_watermark_label(self) -> Optional[str]:
+        """Return formatted date watermark string in archive mode, or None in single-file mode."""
+        if not getattr(self.canvas, "is_archive_mode", True):
+            return None
+        day = getattr(self.canvas, "active_day", None)
+        if day and getattr(day, "date", None):
+            return day.date.strftime("%A, %b %-d, %Y") if hasattr(day.date, "strftime") else str(day.date)
+        return None
+
     def _on_draw(self, drawing_area, cr: cairo.Context, width: int, height: int):
         if width <= 0 or height <= 0:
             return
@@ -186,10 +198,25 @@ class OverviewMinimap(Gtk.DrawingArea):
                     cr.rectangle(nx, ny, nw, 1.5)
                 cr.fill()
 
-            # Starred pip
-            if item.session.starred:
-                cr.set_source_rgba(0.95, 0.80, 0.20, 0.9)
-                cr.arc(sx + 5.0, 6.0, 2.5, 0, 2 * 3.14159)
+            # Flag markers / Starred pips at exact temporal positions
+            markers = item.midi_data.markers
+            if markers:
+                for m in markers:
+                    mx = (self.canvas.time_to_x(item.timeline_offset + m.time) - day_start_cx) * scale
+                    # Gold pip at exact marker position
+                    cr.set_source_rgba(0.96, 0.78, 0.22, 0.95)
+                    cr.arc(mx, 5.0, 2.5, 0, 2 * 3.14159)
+                    cr.fill()
+
+                    # Tiny 1px vertical pin/tick mark extending down into the roll
+                    cr.set_line_width(1.0)
+                    cr.move_to(mx, 7.5)
+                    cr.line_to(mx, 12.0)
+                    cr.stroke()
+            elif item.session.starred:
+                # Fallback starred pip at clip start if session is starred without specific markers
+                cr.set_source_rgba(0.96, 0.78, 0.22, 0.95)
+                cr.arc(sx + 5.0, 5.0, 2.5, 0, 2 * 3.14159)
                 cr.fill()
 
         # 3. Translucent Viewport Lens (active scroll view)
@@ -235,9 +262,9 @@ class OverviewMinimap(Gtk.DrawingArea):
             cr.line_to(play_x, height)
             cr.stroke()
 
-        # Day title watermark
-        if day and day.date:
-            day_label = day.date.strftime("%A, %b %-d, %Y") if hasattr(day.date, "strftime") else str(day.date)
+        # Day title watermark (only in archive mode)
+        day_label = self.get_day_watermark_label()
+        if day_label:
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
             cr.set_font_size(9.0)
             if is_dark:

@@ -193,9 +193,31 @@ def test_program_change_dispatch():
     print("  ✓ Passed unified single-instrument vs multi-track program routing and seek synchronization.")
 
 
+def test_playback_finished_callback():
+    print("[TEST] test_playback_finished_callback...")
+    synth = NullSynthEngine()
+    player = AudioPlayer(synth=synth)
+
+    notes = [
+        NoteEvent(pitch=60, velocity=100, start_time=0.01, end_time=0.05),
+    ]
+    data = MidiData(duration=0.08, notes=notes, sections=[Section(0.01, 0.05)])
+    player.load_midi_data(data)
+
+    finished = []
+    player.on_playback_finished = lambda: finished.append(True)
+
+    player.play(from_time=0.0)
+    time.sleep(0.18)
+    assert len(finished) == 1, f"Expected 1 on_playback_finished call, got {len(finished)}"
+    assert player.is_playing is False
+    print("  ✓ Passed playback finished callback firing at duration boundary.")
+
+
 if __name__ == "__main__":
     test_acoustic_scrubbing()
     test_bidirectional_gap_and_section_skipping()
     test_transport_playback()
     test_program_change_dispatch()
+    test_playback_finished_callback()
     print("\n🎉 ALL PLAYER TESTS PASSED SUCCESSFULLY!")

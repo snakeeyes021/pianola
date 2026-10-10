@@ -92,7 +92,7 @@ class PianolaApplication(Adw.Application):
             application_name='Pianola',
             application_icon='tech.redfoxlabs.Pianola',
             developer_name='Matthew Samson',
-            version='0.1.0',
+            version='0.1.1',
             translator_credits=_('translator-credits'),
             developers=['Matthew Samson'],
             copyright='© 2026 Matthew Samson'
