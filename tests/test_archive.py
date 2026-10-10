@@ -118,6 +118,9 @@ def test_sqlite_archive_operations():
                 ), (
                     '2026-10-05T14:00:00', '2026-10-05T14:10:00', 600.0, 420.0,
                     800, 'Keystation 88', '/tmp/fake2.mid', 128.0, 1, 'Marker: Clapper ★'
+                ), (
+                    '2026-10-06T09:30:00', '2026-10-06T09:40:00', 600.0, 400.0,
+                    500, 'Keystation 88', '/tmp/fake3.mid', 120.0, 0, 'Next day take'
                 );
             """)
         conn.close()
@@ -126,15 +129,35 @@ def test_sqlite_archive_operations():
         assert mgr.archive_exists(), "Archive should exist"
 
         sessions = mgr.load_sessions()
-        assert len(sessions) == 2, f"Expected 2 sessions, got {len(sessions)}"
+        assert len(sessions) == 3, f"Expected 3 sessions, got {len(sessions)}"
         assert sessions[0].note_count == 250
         assert sessions[1].starred is True
         assert "Clapper" in (sessions[1].notes or "")
 
+        # Test available dates discovery
+        dates = mgr.get_available_dates()
+        from datetime import date
+        d1 = sessions[0].start_time.date()
+        d2 = sessions[2].start_time.date()
+        assert dates == [d1, d2], f"Expected {[d1, d2]}, got {dates}"
+
+        # Test day-scoped session loading
+        day1_sessions = mgr.load_sessions_for_date(d1)
+        assert len(day1_sessions) == 2
+        assert day1_sessions[0].id == 1
+        assert day1_sessions[1].id == 2
+
+        day2_sessions = mgr.load_sessions_for_date(d2)
+        assert len(day2_sessions) == 1
+        assert day2_sessions[0].id == 3
+
+        empty_day_sessions = mgr.load_sessions_for_date(date(2026, 10, 20))
+        assert len(empty_day_sessions) == 0
+
         # Test latest session retrieval
         latest = mgr.get_latest_session()
         assert latest is not None
-        assert latest.id == 2
+        assert latest.id == 3
 
         # Test starring toggle
         assert mgr.set_starred(session_id=1, starred=True)

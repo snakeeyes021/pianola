@@ -662,6 +662,112 @@ class ArchiveManager:
         """True if Midikeep index.db exists."""
         return os.path.exists(self.db_path)
 
+    @staticmethod
+    def _parse_timestamp(ts_str: str) -> datetime:
+        try:
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is not None:
+                return ts.astimezone()
+            else:
+                return ts.replace(tzinfo=timezone.utc).astimezone()
+        except Exception:
+            return datetime.now()
+
+    @classmethod
+    def _row_to_record(cls, row) -> SessionRecord:
+        st = cls._parse_timestamp(row["start_time"])
+        try:
+            et = cls._parse_timestamp(row["end_time"])
+        except Exception:
+            et = st
+
+        return SessionRecord(
+            id=row["id"],
+            start_time=st,
+            end_time=et,
+            duration_seconds=float(row["duration_seconds"] or 0.0),
+            active_play_seconds=float(row["active_play_seconds"] or 0.0),
+            note_count=int(row["note_count"] or 0),
+            device_name=row["device_name"] or "Unknown Device",
+            file_path=row["file_path"],
+            key_signature=row["key_signature"],
+            tempo_bpm=float(row["tempo_bpm"] or 120.0),
+            starred=bool(row["starred"]),
+            notes=row["notes"]
+        )
+
+    def get_available_dates(self) -> List[Any]:
+        """Return a sorted list of unique calendar dates present in the archive."""
+        dates_set = set()
+        if self.archive_exists():
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT start_time FROM sessions ORDER BY start_time ASC")
+                for (st_str,) in cursor.fetchall():
+                    st = self._parse_timestamp(st_str)
+                    dates_set.add(st.date())
+            finally:
+                conn.close()
+
+        live = self.get_live_session()
+        if live:
+            dates_set.add(live.start_time.date())
+
+        return sorted(list(dates_set))
+
+    def load_sessions_for_date(self, target_date) -> List[SessionRecord]:
+        """Load only the sessions belonging to a specific calendar date."""
+        from datetime import date, timedelta
+        if isinstance(target_date, datetime):
+            target_date = target_date.date()
+
+        records = []
+        if self.archive_exists():
+            prev_d = target_date - timedelta(days=1)
+            next_d = target_date + timedelta(days=1)
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, start_time, end_time, duration_seconds, active_play_seconds,
+                           note_count, device_name, file_path, key_signature, tempo_bpm,
+                           starred, notes
+                    FROM sessions
+                    WHERE start_time >= ? AND start_time <= ?
+                    ORDER BY start_time ASC
+                """, (
+                    f"{prev_d.year:04d}-{prev_d.month:02d}-{prev_d.day:02d}T00:00:00",
+                    f"{next_d.year:04d}-{next_d.month:02d}-{next_d.day:02d}T23:59:59.999999"
+                ))
+                rows = cursor.fetchall()
+                if not rows:
+                    cursor.execute("""
+                        SELECT id, start_time, end_time, duration_seconds, active_play_seconds,
+                               note_count, device_name, file_path, key_signature, tempo_bpm,
+                               starred, notes
+                        FROM sessions
+                        ORDER BY start_time ASC
+                    """)
+                    rows = cursor.fetchall()
+
+                for row in rows:
+                    rec = self._row_to_record(row)
+                    if rec.start_time.date() == target_date:
+                        records.append(rec)
+            finally:
+                conn.close()
+
+        # Append live session if it belongs to target_date
+        live = self.get_live_session()
+        if live and live.start_time.date() == target_date:
+            if not any(r.file_path == live.file_path for r in records):
+                records.append(live)
+
+        records.sort(key=lambda r: r.start_time)
+        return records
+
     def load_sessions(self) -> List[SessionRecord]:
         """Load all recorded sessions from index.db."""
         if not self.archive_exists():
@@ -669,9 +775,8 @@ class ArchiveManager:
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
         try:
+            cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, start_time, end_time, duration_seconds, active_play_seconds,
                        note_count, device_name, file_path, key_signature, tempo_bpm,
@@ -679,43 +784,7 @@ class ArchiveManager:
                 FROM sessions
                 ORDER BY start_time ASC
             """)
-            records = []
-            for row in cursor.fetchall():
-                # Parse timestamps
-                st_str = row["start_time"]
-                et_str = row["end_time"]
-                try:
-                    st = datetime.fromisoformat(st_str)
-                    if st.tzinfo is not None:
-                        st = st.astimezone()  # Convert from UTC to local system time
-                    else:
-                        st = st.replace(tzinfo=timezone.utc).astimezone()
-                except Exception:
-                    st = datetime.now()
-                try:
-                    et = datetime.fromisoformat(et_str)
-                    if et.tzinfo is not None:
-                        et = et.astimezone()
-                    else:
-                        et = et.replace(tzinfo=timezone.utc).astimezone()
-                except Exception:
-                    et = st
-
-                records.append(SessionRecord(
-                    id=row["id"],
-                    start_time=st,
-                    end_time=et,
-                    duration_seconds=float(row["duration_seconds"] or 0.0),
-                    active_play_seconds=float(row["active_play_seconds"] or 0.0),
-                    note_count=int(row["note_count"] or 0),
-                    device_name=row["device_name"] or "Unknown Device",
-                    file_path=row["file_path"],
-                    key_signature=row["key_signature"],
-                    tempo_bpm=float(row["tempo_bpm"] or 120.0),
-                    starred=bool(row["starred"]),
-                    notes=row["notes"]
-                ))
-            return records
+            return [self._row_to_record(row) for row in cursor.fetchall()]
         finally:
             conn.close()
 
