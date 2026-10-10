@@ -48,6 +48,8 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.canvas = TimelineCanvas(self.player)
         self.is_archive_mode: bool = True
         self.current_single_file_path: Optional[str] = None
+        self.available_dates: List[Any] = []
+        self.current_date: Optional[Any] = None
 
         # Connect canvas callbacks
         self.canvas.on_star_toggled = self._on_star_toggled
@@ -214,15 +216,12 @@ class PianolaWindow(Adw.ApplicationWindow):
         self.btn_calendar.set_popover(self.calendar_popover)
 
     def _reset_calendar_to_current_date(self, *args):
-        if not self.canvas.session_items:
-            return
-        curr_t = self.player.current_time
-        curr_item = self.canvas.get_session_at_time(curr_t)
-        if not curr_item:
-            curr_item = self.canvas.session_items[0]
-        dt = curr_item.session.start_time
-        gdt = GLib.DateTime.new_local(dt.year, dt.month, dt.day, 0, 0, 0)
-        self.calendar.select_day(gdt)
+        dt = getattr(self, "current_date", None)
+        if not dt and self.canvas.session_items:
+            dt = self.canvas.session_items[0].session.start_time.date()
+        if dt:
+            gdt = GLib.DateTime.new_local(dt.year, dt.month, dt.day, 0, 0, 0)
+            self.calendar.select_day(gdt)
 
     def _setup_drag_source(self):
         """Enable dragging marquee selection or active file directly from timeline into DAWs, Notation, or Nautilus."""
@@ -301,11 +300,12 @@ class PianolaWindow(Adw.ApplicationWindow):
         if self.is_archive_mode:
             self.btn_prev_day.set_tooltip_text(_("Previous Day"))
             self.btn_next_day.set_tooltip_text(_("Next Day"))
-            active_day = self.canvas.active_day
-            if active_day and self.canvas.ordered_days:
-                idx = self.canvas.ordered_days.index(active_day)
-                self.btn_prev_day.set_sensitive(idx > 0 or self.player.current_time > active_day.start_offset + 0.5)
-                self.btn_next_day.set_sensitive(idx < len(self.canvas.ordered_days) - 1)
+            dates = getattr(self, "available_dates", None)
+            curr = getattr(self, "current_date", None)
+            if dates and curr and curr in dates:
+                idx = dates.index(curr)
+                self.btn_prev_day.set_sensitive(idx > 0)
+                self.btn_next_day.set_sensitive(idx < len(dates) - 1)
             else:
                 self.btn_prev_day.set_sensitive(False)
                 self.btn_next_day.set_sensitive(False)
@@ -337,33 +337,58 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.window_title.set_subtitle("No Archive Found")
             return
 
-        sessions = self.archive_mgr.load_sessions()
-        live = self.archive_mgr.get_live_session()
-        if live:
-            sessions.append(live)
-
-        if not sessions:
+        self.available_dates = self.archive_mgr.get_available_dates()
+        if not self.available_dates:
             self.view_stack.set_visible_child_name("empty")
             self.window_title.set_subtitle("Empty Archive")
             return
 
         self.view_stack.set_visible_child_name("timeline")
-        self.canvas.load_sessions(sessions)
-        self.player.set_multi_track_mode(self.btn_multi_track.get_active())
-
-        # Default start position: beginning of today's sessions or latest session
-        target_t = self.canvas.jump_to_today_or_latest()
-        self.scroll_to_time(target_t)
-
-        count = len(sessions)
-        self.window_title.set_subtitle(f"Midikeep Archive • {count} {'take' if count == 1 else 'takes'}")
         self.is_archive_mode = True
         self.current_single_file_path = None
         self.btn_calendar.set_visible(True)
         self.btn_prev_day.set_visible(True)
         self.btn_next_day.set_visible(True)
-        self._update_nav_buttons()
+
+        # Default start day: latest recording day (most recent day)
+        latest_day = self.available_dates[-1]
+        self.load_archive_day(latest_day, jump_to_latest=True)
         self._setup_primary_menu()
+
+    def load_archive_day(self, target_date, jump_to_latest: bool = False):
+        """Load session slice for target_date so canvas and playback scope strictly to that day."""
+        if isinstance(target_date, datetime):
+            target_date = target_date.date()
+        self.current_date = target_date
+        sessions = self.archive_mgr.load_sessions_for_date(target_date)
+
+        self.canvas.load_sessions(sessions, is_archive_mode=True)
+        self.player.set_multi_track_mode(self.btn_multi_track.get_active())
+
+        if jump_to_latest:
+            target_t = self.canvas.jump_to_latest_session()
+        else:
+            self.player.seek(0.0)
+            target_t = 0.0
+
+        self.scroll_to_time(target_t)
+
+        count = len(sessions)
+        date_str = target_date.strftime("%A, %b %-d, %Y")
+        take_str = f"{count} {'take' if count == 1 else 'takes'}"
+        self.window_title.set_subtitle(f"{date_str} • {take_str}")
+
+        # Update time label immediately
+        cur_t = self.player.current_time
+        tot_t = self.canvas.total_timeline_duration
+        cur_m, cur_s = int(cur_t // 60), int(cur_t % 60)
+        tot_m, tot_s = int(tot_t // 60), int(tot_t % 60)
+        self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
+
+        self._update_nav_buttons()
+        self.canvas.queue_draw()
+        self.minimap.queue_draw()
+        self.keyboard.queue_draw()
 
     def load_file(self, filepath: str):
         """Open an external single MIDI file directly."""
@@ -438,17 +463,10 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.keyboard.queue_draw()
 
         # Update time display scoped to currently active day
-        active_day = self.canvas.active_day
         cur_t = self.player.current_time
-        if active_day:
-            day_cur_t = max(0.0, min(cur_t - active_day.start_offset, active_day.duration))
-            day_tot_t = active_day.duration
-            cur_m, cur_s = int(day_cur_t // 60), int(day_cur_t % 60)
-            tot_m, tot_s = int(day_tot_t // 60), int(day_tot_t % 60)
-        else:
-            cur_m, cur_s = int(cur_t // 60), int(cur_t % 60)
-            tot = self.canvas.total_timeline_duration
-            tot_m, tot_s = int(tot // 60), int(tot % 60)
+        tot = self.canvas.total_timeline_duration
+        cur_m, cur_s = int(cur_t // 60), int(cur_t % 60)
+        tot_m, tot_s = int(tot // 60), int(tot % 60)
         self.lbl_time.set_text(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
         if self.player.is_playing:
@@ -486,9 +504,9 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def _on_calendar_day_selected(self, calendar):
         gdate = calendar.get_date()
-        target = datetime(gdate.get_year(), gdate.get_month(), gdate.get_day_of_month())
-        self.canvas.jump_to_day(target)
-        self.scroll_to_time(self.player.current_time)
+        target = datetime(gdate.get_year(), gdate.get_month(), gdate.get_day_of_month()).date()
+        self.available_dates = self.archive_mgr.get_available_dates()
+        self.load_archive_day(target, jump_to_latest=False)
         popover = self.btn_calendar.get_popover()
         if popover:
             popover.popdown()
@@ -534,11 +552,13 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def _on_prev_day_clicked(self, btn):
         if self.is_archive_mode:
-            target_day = self.canvas.jump_to_prev_day()
-            if target_day:
-                self.scroll_to_time(target_day.start_offset)
-            self._update_nav_buttons()
-            self.minimap.queue_draw()
+            dates = getattr(self, "available_dates", None)
+            curr = getattr(self, "current_date", None)
+            if dates and curr and curr in dates:
+                idx = dates.index(curr)
+                if idx > 0:
+                    prev_date = dates[idx - 1]
+                    self.load_archive_day(prev_date, jump_to_latest=False)
         else:
             if not self.current_single_file_path:
                 return
@@ -559,11 +579,13 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def _on_next_day_clicked(self, btn):
         if self.is_archive_mode:
-            target_day = self.canvas.jump_to_next_day()
-            if target_day:
-                self.scroll_to_time(target_day.start_offset)
-            self._update_nav_buttons()
-            self.minimap.queue_draw()
+            dates = getattr(self, "available_dates", None)
+            curr = getattr(self, "current_date", None)
+            if dates and curr and curr in dates:
+                idx = dates.index(curr)
+                if idx < len(dates) - 1:
+                    next_date = dates[idx + 1]
+                    self.load_archive_day(next_date, jump_to_latest=False)
         else:
             if not self.current_single_file_path:
                 return

@@ -775,13 +775,14 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.player.seek(0.0)
         self.queue_draw()
 
-    def jump_to_latest_session(self):
+    def jump_to_latest_session(self) -> float:
         if not self.session_items:
             self.player.seek(0.0)
-            return
+            return 0.0
         last_item = self.session_items[-1]
         self.player.seek(last_item.timeline_offset)
         self.queue_draw()
+        return last_item.timeline_offset
 
     def jump_to_prev_file(self):
         curr_t = self.player.current_time
