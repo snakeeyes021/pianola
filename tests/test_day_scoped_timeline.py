@@ -128,5 +128,68 @@ class TestDayScopedTimeline(unittest.TestCase):
         self.assertNotIn('Oct 5', badge)
 
 
+
+    def test_cross_day_section_navigation_logic(self):
+        # Setup simulated window state
+        dates = [date(2026, 10, 5), date(2026, 10, 6)]
+        curr_date = dates[0]
+
+        # Day 1 data: sections at 0.0s and 20.0s
+        day1_sections = [Section(0.0, 10.0), Section(20.0, 30.0)]
+        self.player.load_midi_data(MidiData(duration=50.0, notes=[], sections=day1_sections))
+
+        # Position at the last section of Day 1
+        self.player.seek(20.0)
+
+        # 1. Simulating next section when at the last section of Day 1:
+        curr_t = self.player.current_time
+        next_secs = [s for s in self.player.sections if s.start_time > curr_t + 0.05]
+        self.assertEqual(len(next_secs), 0)
+
+        # Cross to Day 2!
+        idx = dates.index(curr_date)
+        self.assertTrue(idx < len(dates) - 1)
+        curr_date = dates[idx + 1]
+
+        # Load Day 2: sections at 0.0s and 15.0s
+        day2_sections = [Section(0.0, 10.0), Section(15.0, 25.0)]
+        self.player.load_midi_data(MidiData(duration=40.0, notes=[], sections=day2_sections))
+
+        # Playhead lands on the first section of Day 2
+        target_t = self.player.sections[0].start_time
+        self.player.seek(target_t)
+        self.assertEqual(self.player.current_time, 0.0)
+        self.assertEqual(curr_date, date(2026, 10, 6))
+
+        # 2. On Day 2, jumping next section moves to section 2 (15.0s)
+        t = self.player.jump_next_section()
+        self.assertEqual(t, 15.0)
+
+        # 3. Jumping prev section moves back to section 1 (0.0s)
+        t = self.player.jump_prev_section()
+        self.assertEqual(t, 0.0)
+
+        # 4. Jumping prev section when already at start (0.0s) of Day 2:
+        curr_t = self.player.current_time
+        first_sec_start = self.player.sections[0].start_time
+        prev_starts = [s.start_time for s in self.player.sections if s.start_time < curr_t - 1.2]
+        self.assertEqual(len(prev_starts), 0)
+        self.assertTrue(curr_t <= first_sec_start + 0.5)
+
+        # Cross back to Day 1!
+        idx = dates.index(curr_date)
+        self.assertTrue(idx > 0)
+        curr_date = dates[idx - 1]
+
+        # Reload Day 1
+        self.player.load_midi_data(MidiData(duration=50.0, notes=[], sections=day1_sections))
+
+        # Playhead lands on the LAST section of Day 1 (20.0s)
+        target_t = self.player.sections[-1].start_time
+        self.player.seek(target_t)
+        self.assertEqual(self.player.current_time, 20.0)
+        self.assertEqual(curr_date, date(2026, 10, 5))
+
+
 if __name__ == '__main__':
     unittest.main()

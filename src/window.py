@@ -71,6 +71,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         # Player callbacks
         self.player.on_state_changed = self._on_player_state_changed
         self.player.on_tick = self._on_player_tick
+        self.player.on_playback_finished = self._on_player_playback_finished
 
         # Setup Calendar Popover
         self._setup_calendar_popover()
@@ -443,7 +444,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
     def _on_player_state_changed(self, is_playing: bool):
         GLib.idle_add(lambda: self.btn_play.set_icon_name(
-            "media-playback-pause-symbolic" if is_playing else "media-playback-start-symbolic"
+            "media-playback-pause-symbolic" if self.player.is_playing else "media-playback-start-symbolic"
         ))
 
     def _on_ui_tick(self, widget, frame_clock):
@@ -605,13 +606,79 @@ class PianolaWindow(Adw.ApplicationWindow):
                 print(f"Error navigating to next file: {e}")
 
 
+    def _on_player_playback_finished(self):
+        GLib.idle_add(self._advance_to_next_day_playback)
+
+    def _advance_to_next_day_playback(self):
+        if self.is_archive_mode and getattr(self, "available_dates", None) and getattr(self, "current_date", None):
+            try:
+                idx = self.available_dates.index(self.current_date)
+                if idx < len(self.available_dates) - 1:
+                    next_date = self.available_dates[idx + 1]
+                    self.load_archive_day(next_date, jump_to_latest=False)
+                    self.player.play(from_time=0.0)
+            except ValueError:
+                pass
+
     def _on_action_prev_section(self, action, param):
-        t = self.player.jump_prev_section()
-        self.scroll_to_time(t)
+        curr_t = self.player.current_time
+        first_sec_start = self.player.sections[0].start_time if self.player.sections else 0.0
+        prev_starts = [s.start_time for s in self.player.sections if s.start_time < curr_t - 1.2]
+
+        if prev_starts:
+            t = self.player.jump_prev_section()
+            self.scroll_to_time(t)
+        elif curr_t > first_sec_start + 0.5:
+            self.player.seek(first_sec_start)
+            self.scroll_to_time(first_sec_start)
+        elif self.is_archive_mode and getattr(self, "available_dates", None) and getattr(self, "current_date", None):
+            try:
+                idx = self.available_dates.index(self.current_date)
+                if idx > 0:
+                    prev_date = self.available_dates[idx - 1]
+                    was_playing = self.player.is_playing
+                    self.load_archive_day(prev_date, jump_to_latest=False)
+                    target_t = self.player.sections[-1].start_time if self.player.sections else 0.0
+                    self.player.seek(target_t)
+                    self.scroll_to_time(target_t)
+                    if was_playing:
+                        self.player.play(from_time=target_t)
+                    return
+            except ValueError:
+                pass
+            self.player.seek(first_sec_start)
+            self.scroll_to_time(first_sec_start)
+        else:
+            t = self.player.jump_prev_section()
+            self.scroll_to_time(t)
 
     def _on_action_next_section(self, action, param):
-        t = self.player.jump_next_section()
-        self.scroll_to_time(t)
+        curr_t = self.player.current_time
+        next_sections = [s for s in self.player.sections if s.start_time > curr_t + 0.05]
+
+        if next_sections:
+            t = self.player.jump_next_section()
+            self.scroll_to_time(t)
+        elif self.is_archive_mode and getattr(self, "available_dates", None) and getattr(self, "current_date", None):
+            try:
+                idx = self.available_dates.index(self.current_date)
+                if idx < len(self.available_dates) - 1:
+                    next_date = self.available_dates[idx + 1]
+                    was_playing = self.player.is_playing
+                    self.load_archive_day(next_date, jump_to_latest=False)
+                    target_t = self.player.sections[0].start_time if self.player.sections else 0.0
+                    self.player.seek(target_t)
+                    self.scroll_to_time(target_t)
+                    if was_playing:
+                        self.player.play(from_time=target_t)
+                    return
+            except ValueError:
+                pass
+            t = self.player.jump_next_section()
+            self.scroll_to_time(t)
+        else:
+            t = self.player.jump_next_section()
+            self.scroll_to_time(t)
 
     def _on_action_open(self, action, param):
         dialog = Gtk.FileDialog()
