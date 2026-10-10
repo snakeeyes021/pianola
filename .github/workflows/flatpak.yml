@@ -36,7 +36,8 @@ jobs:
           python3 tests/test_archive.py
           python3 tests/test_player.py
           python3 tests/test_overview_minimap.py
-          python3 tests/test_timeline_canvas.py
+          python3 tests/test_day_scoped_timeline.py
+          python3 tests/test_header_and_flags_collision.py
 
   flatpak-builder:
     name: Build Flatpak Bundle
