@@ -8,6 +8,8 @@
 * **Packaging Target:** Flatpak (`tech.redfoxlabs.Pianola.json`), targeted for distribution via RedFoxLabs GitHub Container Registry (`ghcr.io/snakeeyes021/pianola`) and GNOME Circle standards.
 * **App Philosophy:** Focused and frictionless. Play, pause, acoustic scrub, continuous infinite scroll, jump dates & sections, skip silences, marquee select, and drag-and-drop into DAWs. No heavy DAW editing, no score editing, zero bloat.
 
+
+**Backlog:** planned work and known issues are in [`docs/BACKLOG.md`](docs/BACKLOG.md). Read it at the start of a session, and add new items there.
 ---
 
 ## 2. Backend Storage Context: Midikeep
