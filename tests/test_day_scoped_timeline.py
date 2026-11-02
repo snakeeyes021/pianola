@@ -190,6 +190,83 @@ class TestDayScopedTimeline(unittest.TestCase):
         self.assertEqual(self.player.current_time, 20.0)
         self.assertEqual(curr_date, date(2026, 10, 5))
 
+    def test_per_track_and_multi_track_selection(self):
+        from gi.repository import Gdk
+        from src.archive import TrackInfo
+
+        tracks = [
+            TrackInfo(track_index=0, channel=0, name='Violin', program=40, instrument_name='Violin', min_pitch=60, max_pitch=72, note_count=2),
+            TrackInfo(track_index=1, channel=1, name='Cello', program=42, instrument_name='Cello', min_pitch=48, max_pitch=60, note_count=2),
+            TrackInfo(track_index=2, channel=2, name='Flute', program=73, instrument_name='Flute', min_pitch=65, max_pitch=80, note_count=2),
+        ]
+        notes = [
+            NoteEvent(pitch=65, velocity=100, start_time=1.0, end_time=4.0, channel=0, track_index=0),
+            NoteEvent(pitch=50, velocity=95, start_time=1.0, end_time=4.0, channel=1, track_index=1),
+            NoteEvent(pitch=74, velocity=90, start_time=1.0, end_time=4.0, channel=2, track_index=2),
+        ]
+        midi = MidiData(duration=10.0, notes=notes, sections=[Section(0.0, 10.0)], tracks=tracks)
+        sess = SessionRecord(
+            id=1,
+            start_time=datetime(2026, 10, 5, 10, 0),
+            end_time=datetime(2026, 10, 5, 10, 0, 10),
+            duration_seconds=10.0,
+            active_play_seconds=10.0,
+            note_count=3,
+            device_name='Orchestra',
+            file_path='/tmp/orch.mid',
+            _cached_midi=midi,
+        )
+        self.canvas.get_height = lambda: 344
+        self.canvas.load_sessions([sess], is_archive_mode=False)
+        self.canvas.set_multi_track_mode(True)
+
+        # Compute lane Y centers (roll_top=44, roll_bottom=320)
+        lanes = self.canvas.get_track_lane_geometries(44.0, 320.0)
+        self.assertEqual(len(lanes), 3)
+        y_track0 = (lanes[0][1] + lanes[0][2]) / 2.0
+        y_track1 = (lanes[1][1] + lanes[1][2]) / 2.0
+        y_track2 = (lanes[2][1] + lanes[2][2]) / 2.0
+
+        # 1. Single-track drag on Track 0 (Violin) from 1.5s to 3.5s
+        self.canvas._begin_pointer_interaction(self.canvas.time_to_x(1.5), y_track0, Gdk.ModifierType(0))
+        self.canvas._apply_drag_selection(1.5, 3.5, y_track0, y_track0)
+        self.assertEqual(self.canvas.selection_range, (1.5, 3.5))
+        self.assertEqual(self.canvas.selected_tracks, {(0, 0)})
+        sliced = self.canvas.get_selected_notes()
+        self.assertEqual(len(sliced), 1)
+        self.assertEqual(sliced[0].pitch, 65)
+        self.assertTrue(self.canvas.is_point_in_selection(2.0, y_track0, height=344))
+        self.assertFalse(self.canvas.is_point_in_selection(2.0, y_track1, height=344))
+
+        # 2. Dragging across Track 0 and Track 1 selects that stretch on both tracks
+        self.canvas._begin_pointer_interaction(self.canvas.time_to_x(1.5), y_track0, Gdk.ModifierType(0))
+        self.canvas._apply_drag_selection(1.5, 3.5, y_track0, y_track1)
+        self.assertEqual(self.canvas.selected_tracks, {(0, 0), (1, 1)})
+        self.assertEqual(len(self.canvas.get_selected_notes()), 2)
+
+        # 3. Ctrl-drag on Track 2 (Flute) adds non-contiguous Track 2 [2.0, 3.0] while keeping Track 0 & 1 [1.5, 3.5]
+        self.canvas._begin_pointer_interaction(self.canvas.time_to_x(2.0), y_track2, Gdk.ModifierType.CONTROL_MASK)
+        self.canvas._drag_moved = True
+        self.canvas._apply_drag_selection(2.0, 3.0, y_track2, y_track2)
+        self.assertEqual(self.canvas.selected_tracks, {(0, 0), (1, 1), (2, 2)})
+        eff = self.canvas.get_effective_track_intervals()
+        self.assertEqual(eff[(0, 0)], [(1.5, 3.5)])
+        self.assertEqual(eff[(2, 2)], [(2.0, 3.0)])
+
+        # 4. Ctrl-drag inside already selected Track 1 subtracts from Track 1
+        self.canvas._begin_pointer_interaction(self.canvas.time_to_x(2.0), y_track1, Gdk.ModifierType.CONTROL_MASK)
+        self.canvas._drag_moved = True
+        self.canvas._apply_drag_selection(1.5, 3.5, y_track1, y_track1)
+        self.assertEqual(self.canvas.selected_tracks, {(0, 0), (2, 2)})
+
+        # 5. Dragging on the footer time ruler selects whole-range across all tracks
+        y_ruler = 330.0
+        self.canvas._begin_pointer_interaction(self.canvas.time_to_x(1.0), y_ruler, Gdk.ModifierType(0))
+        self.canvas._apply_drag_selection(1.0, 3.0, y_ruler, y_ruler)
+        self.assertEqual(self.canvas.selection_range, (1.0, 3.0))
+        self.assertIsNone(self.canvas.selected_tracks)
+        self.assertEqual(len(self.canvas.get_selected_notes()), 3)
+
 
 if __name__ == '__main__':
     unittest.main()

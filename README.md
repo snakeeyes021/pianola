@@ -29,11 +29,11 @@ These features work with any standard `.mid` file opened via the file chooser, f
 * **Silence Compacting:** Extended pauses are collapsed visually on the timeline to keep takes compact.
 * **Section Jumps:** Jump between musical phrases and sections using `[` and `]`.
 * **Pedal Sustain Display:** Visual distinction between key presses and damper pedal (CC 64) resonance tails.
-* **Marquee Selection & DAW Drag-and-Drop:** Click and drag to select any time region, then drag the selection directly into DAWs (Bitwig, Reaper, Ardour), notation software, or file managers.
-* **Export:** Save selected time slices or entire takes directly to `.mid` files (`Ctrl+E`).
+* **Whole-Range & Per-Track Selection:** Click and drag to select a time range across all tracks, or in Multi-Track view (`Ctrl+T`) drag within a single track lane, drag across several lanes, or `Ctrl`-drag for fine-grained multi-track selection.
+* **Copy, Drag-and-Drop & Export:** Copy (`Ctrl+C`), drag out into DAWs (Bitwig, Reaper, Ardour), notation software, or file managers, or export directly to `.mid` files (`Ctrl+E`).
 
 ### Midikeep Archive Companion
-When running on RedFox OS or systems with the [Midikeep](https://github.com/snakeeyes021/redfox-os) recording daemon, Pianola automatically detects the archive and provides extended history navigation:
+When running on RedFox OS or systems with the [Midikeep](https://github.com/snakeeyes021/redfox-os) recording daemon, Pianola automatically detects the archive (reading `data_dir` from `~/.config/midikeep/config.yaml` and falling back to `~/.local/share/midikeep/`) and provides extended history navigation:
 
 * **Automatic Archive Loading:** Opens directly into your recording timeline on launch, positioning the view at your latest take.
 * **Continuous History Scroll:** Pan seamlessly across recording sessions spanning days, months, and years.
@@ -56,6 +56,7 @@ When running on RedFox OS or systems with the [Midikeep](https://github.com/snak
 | `Ctrl + Wheel` | Zoom at cursor (or scroll during audition) |
 | `Middle Click` + drag | Smooth pan / autoscroll |
 | `Ctrl + O` | Open MIDI file |
+| `Ctrl + C` | Copy selection or take |
 | `Ctrl + E` | Export selection or take |
 | `Ctrl + Q` | Quit |
 | `Ctrl + ?` | Show all keyboard shortcuts |

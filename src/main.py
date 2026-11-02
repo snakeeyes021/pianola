@@ -39,6 +39,7 @@ class PianolaApplication(Adw.Application):
 
         # Window accelerators
         self.set_accels_for_action("win.open", ['<control>o'])
+        self.set_accels_for_action("win.copy", ['<control>c'])
         self.set_accels_for_action("win.export", ['<control>e'])
         self.set_accels_for_action("win.play_pause", ['space'])
         self.set_accels_for_action("win.play_selection", ['p'])

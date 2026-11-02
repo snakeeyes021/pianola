@@ -266,6 +266,181 @@ def test_multi_track_parsing():
         os.unlink(tmp_name)
 
 
+def test_midikeep_shared_config_archive_location():
+    print("[TEST] test_midikeep_shared_config_archive_location...")
+    from src.archive import get_midikeep_dir, get_midikeep_config_path, load_midikeep_config
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        custom_archive = os.path.join(tmpdir, "custom_midikeep_archive")
+        sessions_dir = os.path.join(custom_archive, "sessions", "2026-10")
+        os.makedirs(sessions_dir, exist_ok=True)
+
+        # Create a session MIDI file inside the relocated archive
+        rel_midi_path = os.path.join(sessions_dir, "take1.mid")
+        MidiParser.write_notes_to_file(
+            [NoteEvent(pitch=60, velocity=100, start_time=0.0, end_time=1.0, channel=0)],
+            rel_midi_path,
+        )
+
+        # Create index.db where file_path was recorded under an old ~/.local/share/midikeep path
+        db_path = os.path.join(custom_archive, "index.db")
+        conn = sqlite3.connect(db_path)
+        with conn:
+            conn.execute("""
+                CREATE TABLE sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    start_time TIMESTAMP NOT NULL,
+                    end_time TIMESTAMP NOT NULL,
+                    duration_seconds REAL NOT NULL,
+                    active_play_seconds REAL NOT NULL,
+                    note_count INTEGER NOT NULL,
+                    device_name TEXT NOT NULL,
+                    file_path TEXT NOT NULL UNIQUE,
+                    key_signature TEXT,
+                    tempo_bpm REAL DEFAULT 120.0,
+                    starred BOOLEAN DEFAULT 0,
+                    notes TEXT
+                );
+            """)
+            conn.execute("""
+                INSERT INTO sessions (
+                    start_time, end_time, duration_seconds, active_play_seconds,
+                    note_count, device_name, file_path, tempo_bpm, starred, notes
+                ) VALUES (
+                    '2026-10-05T12:00:00', '2026-10-05T12:00:01', 1.0, 1.0,
+                    1, 'Piano', '/old/home/.local/share/midikeep/sessions/2026-10/take1.mid', 120.0, 0, ''
+                );
+            """)
+        conn.close()
+
+        # 1. Explicit config_path with data_dir and other midikeep-daemon settings
+        cfg_file = os.path.join(tmpdir, "config.yaml")
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            f.write(
+                f"# Shared Midikeep configuration\n"
+                f"silence_threshold_seconds: 300\n"
+                f"data_dir: \"{custom_archive}\"\n"
+                f"device_blacklist:\n"
+                f"  - Midi Through\n"
+            )
+
+        parsed_cfg = load_midikeep_config(cfg_file)
+        assert parsed_cfg.get("data_dir") == custom_archive
+        assert get_midikeep_dir(cfg_file) == os.path.abspath(custom_archive)
+
+        mgr = ArchiveManager(config_path=cfg_file)
+        assert mgr.data_dir == os.path.abspath(custom_archive)
+        assert mgr.archive_exists()
+        sessions = mgr.load_sessions()
+        assert len(sessions) == 1
+        # Relocated session file path should resolve into custom_archive/sessions/...
+        assert sessions[0].file_path == os.path.abspath(rel_midi_path)
+        assert len(sessions[0].get_midi_data().notes) == 1
+
+        # 2. XDG_CONFIG_HOME discovery and fallback when config is absent or omits data_dir
+        xdg_cfg = os.path.join(tmpdir, "xdg_config")
+        xdg_data = os.path.join(tmpdir, "xdg_data")
+        mk_cfg_dir = os.path.join(xdg_cfg, "midikeep")
+        os.makedirs(mk_cfg_dir, exist_ok=True)
+        xdg_cfg_file = os.path.join(mk_cfg_dir, "config.yaml")
+
+        old_xdg_cfg = os.environ.get("XDG_CONFIG_HOME")
+        old_xdg_data = os.environ.get("XDG_DATA_HOME")
+        old_mk_cfg = os.environ.get("MIDIKEEP_CONFIG")
+        try:
+            os.environ["XDG_CONFIG_HOME"] = xdg_cfg
+            os.environ["XDG_DATA_HOME"] = xdg_data
+            os.environ.pop("MIDIKEEP_CONFIG", None)
+
+            # Fallback when config.yaml does not exist yet
+            assert get_midikeep_config_path() == xdg_cfg_file
+            assert get_midikeep_dir() == os.path.abspath(os.path.join(xdg_data, "midikeep"))
+
+            # Config file exists without data_dir -> still falls back to default data_dir
+            with open(xdg_cfg_file, "w", encoding="utf-8") as f:
+                f.write("silence_threshold_seconds: 300\n")
+            assert get_midikeep_dir() == os.path.abspath(os.path.join(xdg_data, "midikeep"))
+
+            # Config file specifies data_dir with environment variable expansion
+            os.environ["TEST_MIDIKEEP_ARCHIVE"] = custom_archive
+            with open(xdg_cfg_file, "w", encoding="utf-8") as f:
+                f.write("data_dir: $TEST_MIDIKEEP_ARCHIVE\n")
+            assert get_midikeep_dir() == os.path.abspath(custom_archive)
+        finally:
+            os.environ.pop("TEST_MIDIKEEP_ARCHIVE", None)
+            if old_xdg_cfg is None:
+                os.environ.pop("XDG_CONFIG_HOME", None)
+            else:
+                os.environ["XDG_CONFIG_HOME"] = old_xdg_cfg
+            if old_xdg_data is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = old_xdg_data
+            if old_mk_cfg is not None:
+                os.environ["MIDIKEEP_CONFIG"] = old_mk_cfg
+
+        print("  ✓ Passed shared config.yaml archive location discovery and fallback.")
+
+
+def test_per_track_slice_export():
+    print("[TEST] test_per_track_slice_export...")
+    from src.archive import TrackInfo
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive_mgr = ArchiveManager(tmpdir)
+        tracks_info = [
+            TrackInfo(track_index=0, channel=0, name="Violin", program=40, instrument_name="Violin"),
+            TrackInfo(track_index=1, channel=1, name="Cello", program=42, instrument_name="Cello"),
+            TrackInfo(track_index=2, channel=2, name="Flute", program=73, instrument_name="Flute"),
+        ]
+        notes = [
+            NoteEvent(pitch=67, velocity=100, start_time=1.0, end_time=3.0, channel=0, track_index=0),
+            NoteEvent(pitch=48, velocity=95, start_time=1.0, end_time=3.0, channel=1, track_index=1),
+            NoteEvent(pitch=72, velocity=90, start_time=1.0, end_time=3.0, channel=2, track_index=2),
+        ]
+
+        # 1. Single-track selection export (only Violin on track 0, ch 0)
+        single_path = os.path.join(tmpdir, "single_track.mid")
+        archive_mgr.export_slice(
+            notes,
+            start_time=1.0,
+            end_time=3.0,
+            dest_path=single_path,
+            selected_tracks={(0, 0)},
+            tracks_info=tracks_info,
+        )
+        parsed_single = MidiParser.parse_file(single_path)
+        assert len(parsed_single.notes) == 1
+        assert parsed_single.notes[0].pitch == 67
+        assert parsed_single.notes[0].channel == 0
+        assert parsed_single.tracks[0].program == 40
+
+        # 2. Multi-track selection export with per-track intervals (Violin [1.0, 2.0], Flute [2.0, 3.0], Cello excluded)
+        multi_path = os.path.join(tmpdir, "multi_track.mid")
+        archive_mgr.export_slice(
+            notes,
+            start_time=1.0,
+            end_time=3.0,
+            dest_path=multi_path,
+            selected_tracks={(0, 0), (2, 2)},
+            track_intervals={
+                (0, 0): [(1.0, 2.0)],
+                (2, 2): [(2.0, 3.0)],
+            },
+            tracks_info=tracks_info,
+        )
+        parsed_multi = MidiParser.parse_file(multi_path)
+        assert len(parsed_multi.notes) == 2
+        assert len(parsed_multi.tracks) == 2
+        by_pitch = {n.pitch: n for n in parsed_multi.notes}
+        assert round(by_pitch[67].start_time, 2) == 0.0
+        assert round(by_pitch[67].end_time, 2) == 1.0
+        assert round(by_pitch[72].start_time, 2) == 1.0
+        assert round(by_pitch[72].end_time, 2) == 2.0
+
+        print("  ✓ Passed single-track and multi-track slice export.")
+
+
 if __name__ == "__main__":
     test_midi_write_and_parse()
     test_marquee_slice_export()
@@ -273,4 +448,6 @@ if __name__ == "__main__":
     test_live_journal_detection()
     test_sustain_pedal_parsing()
     test_multi_track_parsing()
+    test_midikeep_shared_config_archive_location()
+    test_per_track_slice_export()
     print("\n🎉 ALL ARCHIVE TESTS PASSED SUCCESSFULLY!")

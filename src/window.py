@@ -114,6 +114,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         if self.archive_mgr.archive_exists():
             s2.append(_("Open Midikeep Archive"), "win.open_archive")
         s2.append(_("Open File…"), "win.open")
+        s2.append(_("Copy Selection / Take"), "win.copy")
         s2.append(_("Export MIDI…"), "win.export")
         menu.append_section(None, s2)
 
@@ -191,6 +192,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         actions = [
             ("open_archive", lambda *_: self.load_archive()),
             ("open", self._on_action_open),
+            ("copy", self._on_action_copy),
             ("export", self._on_action_export),
             ("play_pause", self._on_action_play_pause),
             ("play_selection", self._on_action_play_selection),
@@ -228,8 +230,42 @@ class PianolaWindow(Adw.ApplicationWindow):
         """Enable dragging marquee selection or active file directly from timeline into DAWs, Notation, or Nautilus."""
         self.canvas.on_request_drag_content = self._create_drag_content_provider
 
+    def _collect_timeline_notes(self) -> List[NoteEvent]:
+        all_notes: List[NoteEvent] = []
+        for item in self.canvas.session_items:
+            for n in item.midi_data.notes:
+                key_end = (n.key_end_time + item.timeline_offset) if n.key_end_time is not None else None
+                all_notes.append(NoteEvent(
+                    pitch=n.pitch,
+                    velocity=n.velocity,
+                    start_time=n.start_time + item.timeline_offset,
+                    end_time=n.end_time + item.timeline_offset,
+                    channel=n.channel,
+                    key_end_time=key_end,
+                    track_index=getattr(n, "track_index", 0),
+                ))
+        return all_notes
+
+    def _export_active_selection_to_path(self, dest_path: str) -> Optional[str]:
+        sel = self.canvas.selection_range
+        if not sel:
+            return None
+        s_start, s_end = sel
+        all_notes = self._collect_timeline_notes()
+        sel_tracks = getattr(self.canvas, "selected_tracks", None) if getattr(self.canvas, "multi_track_mode", False) else None
+        track_intervals = self.canvas.get_effective_track_intervals() if getattr(self.canvas, "multi_track_mode", False) else None
+        return self.archive_mgr.export_slice(
+            all_notes,
+            s_start,
+            s_end,
+            dest_path,
+            selected_tracks=sel_tracks,
+            track_intervals=track_intervals,
+            tracks_info=getattr(self.canvas, "tracks", None),
+        )
+
     def _create_drag_content_provider(self, use_selection: bool = True, target_item = None):
-        """Prepare rock-solid MIDI file provider for drag operation supporting GdkFileList, text/uri-list, and text/plain."""
+        """Prepare rock-solid MIDI file provider for drag operation supporting GdkFileList, text/uri-list, audio/midi, and text/plain."""
         if not self.canvas.session_items:
             return None
 
@@ -238,20 +274,18 @@ class PianolaWindow(Adw.ApplicationWindow):
         final_path = None
 
         if use_selection and sel:
-            # Marquee slice export
+            # Marquee slice export (whole-range or per-track)
             s_start, s_end = sel
-            final_path = os.path.join(export_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s.mid")
-            all_notes: List[NoteEvent] = []
-            for item in self.canvas.session_items:
-                for n in item.midi_data.notes:
-                    all_notes.append(NoteEvent(
-                        pitch=n.pitch,
-                        velocity=n.velocity,
-                        start_time=n.start_time + item.timeline_offset,
-                        end_time=n.end_time + item.timeline_offset,
-                        channel=n.channel
-                    ))
-            self.archive_mgr.export_slice(all_notes, s_start, s_end, final_path)
+            sel_tracks = getattr(self.canvas, "selected_tracks", None) if getattr(self.canvas, "multi_track_mode", False) else None
+            track_suffix = ""
+            if sel_tracks is not None:
+                if len(sel_tracks) == 1:
+                    ti, ch = next(iter(sel_tracks))
+                    track_suffix = f"_T{ti + 1}_Ch{ch + 1}"
+                else:
+                    track_suffix = f"_{len(sel_tracks)}tracks"
+            final_path = os.path.join(export_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s{track_suffix}.mid")
+            self._export_active_selection_to_path(final_path)
         else:
             if not target_item:
                 curr_t = self.player.current_time
@@ -272,14 +306,22 @@ class PianolaWindow(Adw.ApplicationWindow):
                     velocity=n.velocity,
                     start_time=n.start_time,
                     end_time=n.end_time,
-                    channel=n.channel
+                    channel=n.channel,
+                    key_end_time=n.key_end_time,
+                    track_index=getattr(n, "track_index", 0),
                 ) for n in target_item.midi_data.notes]
-                self.archive_mgr.export_slice(all_notes, 0.0, target_item.duration, final_path)
+                self.archive_mgr.export_slice(
+                    all_notes,
+                    0.0,
+                    target_item.duration,
+                    final_path,
+                    tracks_info=getattr(target_item.midi_data, "tracks", None),
+                )
 
         if not final_path or not os.path.exists(final_path):
             return None
 
-        # Build multi-format provider: GdkFileList for Nautilus, text/uri-list and text/plain for DAWs and Wine/Dorico
+        # Build multi-format provider: GdkFileList for Nautilus, text/uri-list, audio/midi, and text/plain for DAWs and Wine/Dorico
         gfile = Gio.File.new_for_path(os.path.abspath(final_path))
         uri = gfile.get_uri()
         uri_payload = (uri + chr(13) + chr(10)).encode("utf-8")
@@ -291,6 +333,13 @@ class PianolaWindow(Adw.ApplicationWindow):
             providers.append(Gdk.ContentProvider.new_for_value(gfile))
 
         providers.append(Gdk.ContentProvider.new_for_bytes("text/uri-list", GLib.Bytes.new(uri_payload)))
+        try:
+            with open(final_path, "rb") as f:
+                midi_bytes = GLib.Bytes.new(f.read())
+            providers.append(Gdk.ContentProvider.new_for_bytes("audio/midi", midi_bytes))
+            providers.append(Gdk.ContentProvider.new_for_bytes("audio/x-midi", midi_bytes))
+        except Exception:
+            pass
         providers.append(Gdk.ContentProvider.new_for_bytes("text/plain", GLib.Bytes.new(uri_payload)))
         providers.append(Gdk.ContentProvider.new_for_bytes("text/plain;charset=utf-8", GLib.Bytes.new(uri_payload)))
 
@@ -426,6 +475,7 @@ class PianolaWindow(Adw.ApplicationWindow):
         active = btn.get_active()
         self.canvas.set_multi_track_mode(active)
         self.player.set_multi_track_mode(active)
+        self._on_selection_changed(self.canvas.selection_range)
         self.keyboard.queue_draw()
         self.canvas.queue_draw()
 
@@ -438,7 +488,19 @@ class PianolaWindow(Adw.ApplicationWindow):
             dur = s2 - s1
             m1, s_1 = int(s1 // 60), int(s1 % 60)
             m2, s_2 = int(s2 // 60), int(s2 % 60)
-            self.lbl_selection.set_text(f"Selected: {m1:02d}:{s_1:02d} – {m2:02d}:{s_2:02d} ({dur:.1f}s)")
+            track_info_str = ""
+            if getattr(self.canvas, "multi_track_mode", False) and len(getattr(self.canvas, "tracks", [])) > 1:
+                sel_tracks = getattr(self.canvas, "selected_tracks", None)
+                if sel_tracks is not None:
+                    selected_info = self.canvas.get_selected_tracks_info()
+                    if len(selected_info) == 1:
+                        trk = selected_info[0]
+                        track_info_str = f" • {trk.name} (Ch {trk.channel + 1})"
+                    elif len(selected_info) > 1:
+                        track_info_str = f" • {len(selected_info)} tracks"
+            self.lbl_selection.set_text(
+                f"Selected: {m1:02d}:{s_1:02d} – {m2:02d}:{s_2:02d} ({dur:.1f}s){track_info_str}"
+            )
         else:
             self.lbl_selection.set_text("No selection")
 
@@ -701,6 +763,18 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         dialog.open(self, None, _open_cb)
 
+    def _on_action_copy(self, action, param):
+        """Copy active selection slice (or current take) to the system clipboard."""
+        use_selection = bool(self.canvas.selection_range)
+        provider = self._create_drag_content_provider(use_selection=use_selection)
+        if not provider:
+            return
+        display = Gdk.Display.get_default()
+        if display:
+            clipboard = display.get_clipboard()
+            if clipboard:
+                clipboard.set_content(provider)
+
     def _on_action_export(self, action, param):
         """Export selection (marquee slice), current file, or multiple files."""
         dialog = Gtk.FileDialog()
@@ -720,18 +794,7 @@ class PianolaWindow(Adw.ApplicationWindow):
                 dest_path = gfile.get_path()
 
                 if sel:
-                    s_start, s_end = sel
-                    all_notes: List[NoteEvent] = []
-                    for item in self.canvas.session_items:
-                        for n in item.midi_data.notes:
-                            all_notes.append(NoteEvent(
-                                pitch=n.pitch,
-                                velocity=n.velocity,
-                                start_time=n.start_time + item.timeline_offset,
-                                end_time=n.end_time + item.timeline_offset,
-                                channel=n.channel
-                            ))
-                    self.archive_mgr.export_slice(all_notes, s_start, s_end, dest_path)
+                    self._export_active_selection_to_path(dest_path)
                 elif self.canvas.session_items:
                     src_file = self.canvas.session_items[0].session.file_path
                     self.archive_mgr.export_file(src_file, dest_path)

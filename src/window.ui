@@ -253,6 +253,10 @@
         <attribute name="action">win.open</attribute>
       </item>
       <item>
+        <attribute name="label" translatable="yes">_Copy Selection / Take</attribute>
+        <attribute name="action">win.copy</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">_Export MIDI…</attribute>
         <attribute name="action">win.export</attribute>
       </item>
