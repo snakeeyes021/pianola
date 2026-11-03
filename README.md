@@ -12,7 +12,7 @@
 
 ---
 
-**Pianola** is a lightweight GTK 4 / Libadwaita application for previewing, scrubbing, and browsing MIDI recordings. It can be used as a standalone player for any Standard MIDI File, or as the graphical companion to Midikeep, the background MIDI capture service on [RedFox OS](https://github.com/snakeeyes021/redfox-os).
+**Pianola** is a lightweight GTK 4 / Libadwaita application for previewing, scrubbing, and browsing MIDI recordings. It can be used as a standalone player for any Standard MIDI File, or as the graphical companion to Midikeep, the background MIDI capture service on [RedFoxOS](https://github.com/snakeeyes021/redfox-os).
 
 Instead of opening a full DAW just to find a take or audit an idea, Pianola provides fast acoustic scrubbing, quick section jumps, multi-track viewing, marquee selection, and direct drag-and-drop into DAWs and notation editors.
 
@@ -33,7 +33,7 @@ These features work with any standard `.mid` file opened via the file chooser, f
 * **Export:** Save selected time slices or entire takes directly to `.mid` files (`Ctrl+E`).
 
 ### Midikeep Archive Companion
-When running on RedFox OS or systems with the [Midikeep](https://github.com/snakeeyes021/redfox-os) recording daemon, Pianola automatically detects the archive and provides extended history navigation:
+When running on RedFoxOS or systems with the [Midikeep](https://github.com/snakeeyes021/redfox-os) recording daemon, Pianola automatically detects the archive and provides extended history navigation:
 
 * **Automatic Archive Loading:** Opens directly into your recording timeline on launch, positioning the view at your latest take.
 * **Continuous History Scroll:** Pan seamlessly across recording sessions spanning days, months, and years.
