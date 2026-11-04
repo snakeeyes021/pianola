@@ -116,21 +116,65 @@ def load_midikeep_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     return data
 
 
+def _in_flatpak() -> bool:
+    return bool(os.environ.get("FLATPAK_ID")) or os.path.exists("/.flatpak-info")
+
+
+def host_visible_path(path: str) -> str:
+    """Return a path to the same file that other apps (outside this Flatpak sandbox) can open.
+
+    A Flatpak grant such as ``--filesystem=xdg-data/midikeep`` also bind-mounts the host's
+    ``~/.local/share/midikeep`` onto the app's private ``~/.var/app/<id>/data/midikeep``. Paths under
+    that private directory only exist inside the sandbox: handed to a drop target (a DAW under Wine,
+    Nautilus) they point at an empty directory. Map them back to the host location, but only when it
+    is provably the same file. Outside Flatpak, or when no mapping applies, the path is returned as is.
+    """
+    if not path or not _in_flatpak():
+        return path
+    home = os.path.expanduser("~")
+    pairs = (
+        ("XDG_DATA_HOME", os.path.join(home, ".local", "share")),
+        ("XDG_CONFIG_HOME", os.path.join(home, ".config")),
+        ("XDG_CACHE_HOME", os.path.join(home, ".cache")),
+        ("XDG_STATE_HOME", os.path.join(home, ".local", "state")),
+    )
+    abs_path = os.path.abspath(path)
+    for var, host_dir in pairs:
+        sandbox_dir = os.environ.get(var)
+        if not sandbox_dir:
+            continue
+        sandbox_dir = os.path.abspath(os.path.expanduser(sandbox_dir))
+        host_dir = os.path.abspath(host_dir)
+        if sandbox_dir == host_dir or not (abs_path == sandbox_dir or abs_path.startswith(sandbox_dir + os.sep)):
+            continue
+        candidate = os.path.join(host_dir, os.path.relpath(abs_path, sandbox_dir))
+        try:
+            if os.path.exists(candidate) and os.path.samefile(candidate, abs_path):
+                return candidate
+        except OSError:
+            pass
+    return path
+
+
 def get_midikeep_dir(config_path: Optional[str] = None) -> str:
-    """Return the Midikeep storage root directory, reading shared config.yaml first."""
+    """Return the Midikeep storage root directory, reading shared config.yaml first.
+
+    Inside Flatpak the result is always a host-visible path (see host_visible_path), because files
+    under it are handed to other apps on drag-and-drop and copy.
+    """
     # 1. Check shared config (~/.config/midikeep/config.yaml or $XDG_CONFIG_HOME/midikeep/config.yaml)
     cfg = load_midikeep_config(config_path)
     configured_dir = cfg.get("data_dir") or cfg.get("archive_dir")
     if isinstance(configured_dir, str) and configured_dir.strip():
         expanded = os.path.expanduser(os.path.expandvars(configured_dir.strip()))
-        return os.path.abspath(expanded)
+        return host_visible_path(os.path.abspath(expanded))
 
     # 2. Check XDG_DATA_HOME (outside Flatpak per-app sandbox dirs, or if index.db exists there)
     xdg_data = os.environ.get("XDG_DATA_HOME")
     if xdg_data:
         candidate = os.path.abspath(os.path.join(os.path.expanduser(xdg_data), "midikeep"))
         if os.path.exists(os.path.join(candidate, "index.db")):
-            return candidate
+            return host_visible_path(candidate)
         if "/.var/app/" not in xdg_data and not os.environ.get("FLATPAK_ID"):
             return candidate
 
@@ -815,7 +859,7 @@ class ArchiveManager:
                 with open(test_f, "w") as f:
                     f.write("ok")
                 os.remove(test_f)
-                return c
+                return host_visible_path(c)
             except Exception:
                 continue
         return tempfile.gettempdir()

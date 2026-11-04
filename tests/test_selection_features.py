@@ -379,6 +379,78 @@ class TestSliceFileLayout(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestHostVisiblePath(unittest.TestCase):
+    """Inside Flatpak, files handed to other apps must use host paths, not the app's private bind mounts.
+
+    Regression: in the Builder Flatpak the archive resolved to ~/.var/app/<id>/data/midikeep (Flatpak
+    bind-mounts the granted ~/.local/share/midikeep there), so dragged slices carried a URI that is an
+    empty directory outside the sandbox and Dorico ignored the drop. A symlink stands in for the bind
+    mount here: os.path.samefile treats both the same way.
+    """
+
+    def setUp(self):
+        from unittest import mock
+        import src.archive as archive_mod
+        self.archive_mod = archive_mod
+        self.root = tempfile.mkdtemp(prefix="pianola-flatpak-")
+        self.home = os.path.join(self.root, "home")
+        self.host_mk = os.path.join(self.home, ".local", "share", "midikeep")
+        os.makedirs(os.path.join(self.host_mk, "export"))
+        open(os.path.join(self.host_mk, "index.db"), "w").close()
+        self.slice = os.path.join(self.host_mk, "export", "Pianola_Slice_1s_8s_T2_Ch2.mid")
+        open(self.slice, "wb").close()
+        self.app_data = os.path.join(self.home, ".var", "app", "tech.redfoxlabs.Pianola", "data")
+        self.app_cache = os.path.join(self.home, ".var", "app", "tech.redfoxlabs.Pianola", "cache")
+        os.makedirs(self.app_data)
+        os.makedirs(self.app_cache)
+        os.symlink(self.host_mk, os.path.join(self.app_data, "midikeep"))  # stands in for the bind mount
+        self.env = mock.patch.dict(os.environ, {
+            "HOME": self.home, "FLATPAK_ID": "tech.redfoxlabs.Pianola",
+            "XDG_DATA_HOME": self.app_data, "XDG_CACHE_HOME": self.app_cache,
+            "XDG_CONFIG_HOME": os.path.join(self.home, ".var", "app", "tech.redfoxlabs.Pianola", "config"),
+        })
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_sandbox_path_maps_to_host_path(self):
+        sandbox_slice = os.path.join(self.app_data, "midikeep", "export", "Pianola_Slice_1s_8s_T2_Ch2.mid")
+        self.assertEqual(self.archive_mod.host_visible_path(sandbox_slice), self.slice)
+        self.assertEqual(self.archive_mod.host_visible_path(os.path.join(self.app_data, "midikeep")), self.host_mk)
+
+    def test_unrelated_or_unmatched_paths_are_unchanged(self):
+        other = os.path.join(self.home, "Downloads", "x.mid")
+        self.assertEqual(self.archive_mod.host_visible_path(other), other)
+        # A private file with no host twin (a plain app-private cache file) stays as it is
+        private = os.path.join(self.app_cache, "own.mid")
+        open(private, "wb").close()
+        self.assertEqual(self.archive_mod.host_visible_path(private), private)
+
+    def test_not_mapped_when_host_file_is_a_different_file(self):
+        os.makedirs(os.path.join(self.home, ".cache", "pianola"))
+        open(os.path.join(self.home, ".cache", "pianola", "a.mid"), "wb").close()
+        os.makedirs(os.path.join(self.app_cache, "pianola"))
+        private = os.path.join(self.app_cache, "pianola", "a.mid")
+        open(private, "wb").close()
+        self.assertEqual(self.archive_mod.host_visible_path(private), private)
+
+    def test_outside_flatpak_nothing_changes(self):
+        del os.environ["FLATPAK_ID"]
+        if os.path.exists("/.flatpak-info"):
+            self.skipTest("running inside a Flatpak sandbox")
+        sandbox_slice = os.path.join(self.app_data, "midikeep", "export", "Pianola_Slice_1s_8s_T2_Ch2.mid")
+        self.assertEqual(self.archive_mod.host_visible_path(sandbox_slice), sandbox_slice)
+
+    def test_archive_and_export_dirs_resolve_to_host_paths(self):
+        data_dir = self.archive_mod.get_midikeep_dir(config_path=os.path.join(self.root, "no-config.yaml"))
+        self.assertEqual(data_dir, self.host_mk)
+        am = ArchiveManager.__new__(ArchiveManager)
+        am.data_dir = os.path.join(self.app_data, "midikeep")  # as resolved by the unfixed code
+        self.assertEqual(am.export_dir, os.path.join(self.host_mk, "export"))
+
+
 class TestEdgeAutoscroll(unittest.TestCase):
     def test_speed_profile(self):
         speed = TimelineCanvas.edge_autoscroll_speed

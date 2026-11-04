@@ -15,7 +15,7 @@ from gettext import gettext as _
 
 from gi.repository import Adw, Gtk, Gio, Gdk, GLib
 
-from .archive import ArchiveManager, SessionRecord, NoteEvent
+from .archive import ArchiveManager, SessionRecord, NoteEvent, host_visible_path
 from .player import AudioPlayer
 from .timeline_canvas import TimelineCanvas
 from .overview_minimap import OverviewMinimap
@@ -429,8 +429,11 @@ class PianolaWindow(Adw.ApplicationWindow):
         if not final_path or not os.path.exists(final_path):
             return None
 
+        # The URI is read by other apps, so it must name a path that exists outside the Flatpak sandbox
+        final_path = host_visible_path(os.path.abspath(final_path))
+
         # Build multi-format provider: GdkFileList for Nautilus, text/uri-list, audio/midi, and text/plain for DAWs and Wine/Dorico
-        gfile = Gio.File.new_for_path(os.path.abspath(final_path))
+        gfile = Gio.File.new_for_path(final_path)
         uri = gfile.get_uri()
         uri_payload = (uri + chr(13) + chr(10)).encode("utf-8")
 
