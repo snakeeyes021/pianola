@@ -40,6 +40,23 @@
   </branding>
 
   <releases>
+    <release version="0.2.0" date="2026-11-04">
+      <description>
+        <p>Per-track selection and a much better drag-out into DAWs and notation programs:</p>
+        <ul>
+          <li>Per-track selection in Multi-Track view: drag within a lane to select that stretch of one track, drag across lanes to select it on several, and Ctrl-drag to add or subtract individual track stretches</li>
+          <li>Drag a marquee selection straight into Bitwig, Reaper, Ardour, Dorico, MuseScore or Nautilus; dragged slices now carry real host file paths, so the drop works from the Flatpak (fixes selection drops that Dorico accepted and then ignored)</li>
+          <li>Right-click selection menu: Copy, Export Selection, Play Selection, Select Whole Track, Select All and Clear Selection</li>
+          <li>Whole-track selection and drag: double-click a lane or click a track header, then drag the track out as its own MIDI file</li>
+          <li>Marquee selections auto-scroll the timeline when you drag past either edge</li>
+          <li>Ctrl+C copies the selection, Ctrl+A selects everything, Escape clears the selection</li>
+          <li>Exported slices are standard MIDI Type 1 files with a tempo and time signature track and named instrument tracks, so bars line up in notation programs</li>
+          <li>Pianola reads the Midikeep archive location from the shared ~/.config/midikeep/config.yaml, so it follows wherever Midikeep stores your recordings</li>
+          <li>A properly drawn piano keyboard beside the piano roll, with black keys aligned to their note rows</li>
+          <li>Fixed drag-out from a selection silently failing after Ctrl was released in another window, and a star click toggling twice</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-10-10">
       <description>
         <p>Day-scoped timeline scalability, seamless boundary crossing, and layout refinements:</p>
