@@ -78,6 +78,9 @@ class TimelineCanvas(Gtk.DrawingArea):
     DEFAULT_PX_PER_SEC = 50.0
     MIN_PX_PER_SEC = 8.0
     MAX_PX_PER_SEC = 500.0
+    EDGE_SCROLL_ZONE = 40.0      # Pixels from the left/right edge where a marquee drag starts auto-scrolling
+    EDGE_SCROLL_MIN_SPEED = 240.0   # px/s at the inner edge of the zone
+    EDGE_SCROLL_MAX_SPEED = 2400.0  # px/s cap when the pointer is far past the widget edge
 
     def __init__(self, player: AudioPlayer):
         super().__init__()
@@ -121,9 +124,12 @@ class TimelineCanvas(Gtk.DrawingArea):
         self._ctrl_base_selection: Optional[dict] = None
         self._selection_anchor_time: Optional[float] = None
         self._selection_anchor_y: Optional[float] = None
-        self._click_press_handled: bool = False
         self._drag_target_selection: bool = False
         self._drag_target_header: Optional[TimelineSessionItem] = None
+        self._last_press_time: Optional[int] = None
+        self._marquee_pointer: Optional[Tuple[float, float]] = None
+        self._edge_scroll_tick_id: int = 0
+        self._edge_scroll_last_frame: Optional[int] = None
 
         # Dorico scrub state: Hold Ctrl + Space while moving mouse
         self.ctrl_held: bool = False
@@ -136,6 +142,7 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.on_star_toggled: Optional[Callable[[SessionRecord, bool], None]] = None
         self.on_selection_changed: Optional[Callable[[Optional[Tuple[float, float]]], None]] = None
         self.on_request_drag_content: Optional[Callable[..., Any]] = None
+        self.on_context_menu: Optional[Callable[[float, float], None]] = None
 
         # Hover expansion states for header labels and marker flags
         self.hovered_header_item: Optional[TimelineSessionItem] = None
@@ -399,6 +406,117 @@ class TimelineCanvas(Gtk.DrawingArea):
                         ))
         return sliced
 
+    @property
+    def is_multi_track_view(self) -> bool:
+        return bool(getattr(self, "multi_track_mode", False)) and len(getattr(self, "tracks", [])) > 1
+
+    def select_all(self, notify: bool = True):
+        """Select the whole loaded timeline across all tracks."""
+        if not self.session_items or self.total_timeline_duration <= 0:
+            self.clear_selection(notify=notify)
+            return
+        self.select_whole_range(0.0, self.total_timeline_duration, notify=notify)
+        self._selection_anchor_time = 0.0
+        self._selection_anchor_y = None
+        self.queue_draw()
+
+    def select_whole_tracks(
+        self,
+        track_keys: Optional[Set[Tuple[int, int]]] = None,
+        add: bool = False,
+        notify: bool = True,
+    ):
+        """Select the full length of the given (track_index, channel) tracks.
+
+        With no keys (or outside Multi-Track view, where there is a single lane) this selects everything.
+        With add=True the tracks are added to the current per-track selection instead of replacing it.
+        """
+        total = self.total_timeline_duration
+        if not self.session_items or total <= 0:
+            self.clear_selection(notify=notify)
+            return
+        if not track_keys or not self.is_multi_track_view:
+            self.select_all(notify=notify)
+            return
+
+        valid = {(t.track_index, t.channel) for t in self.tracks}
+        keys = {k for k in track_keys if k in valid}
+        if not keys:
+            return
+        if add and self.selection_range is not None:
+            snap = self._snapshot_selection()
+            self._restore_selection_snapshot(snap, expand_whole_to_tracks=True)
+            if self.selected_tracks is None:
+                self.selected_tracks = set()
+            for k in keys:
+                self.selected_tracks.add(k)
+                self.track_selections[k] = [(0.0, total)]
+            self._recompute_selection_bounds(notify=notify)
+        else:
+            self.select_tracks_stretch(keys, 0.0, total, notify=notify)
+        self._selection_anchor_time = 0.0
+        self.queue_draw()
+
+    def get_whole_selected_track_keys(self) -> Set[Tuple[int, int]]:
+        """Tracks whose selection covers the entire loaded timeline."""
+        if not self.selection_range or self.selected_tracks is None:
+            return set()
+        total = self.total_timeline_duration
+        whole = set()
+        for k, ivs in self.track_selections.items():
+            if len(ivs) == 1 and ivs[0][0] <= 0.02 and ivs[0][1] >= total - 0.02:
+                whole.add(k)
+        return whole
+
+    def get_export_spec(self) -> Optional[Dict[str, Any]]:
+        """Describe exactly what is highlighted, in the form ArchiveManager.export_slice expects.
+
+        Per-track selections only apply in Multi-Track view (that is where they are drawn); in the
+        unified view the highlighted span covers every track.
+        """
+        sel = self.selection_range
+        if not sel:
+            return None
+        start, end = sel
+        if self.is_multi_track_view and self.selected_tracks is not None:
+            return {
+                "start": start,
+                "end": end,
+                "selected_tracks": set(self.selected_tracks),
+                "track_intervals": {k: list(v) for k, v in self.track_selections.items()},
+            }
+        whole_ivs = list(self.whole_range_intervals) if self.selected_tracks is None else []
+        track_intervals = None
+        if len(whole_ivs) > 1:
+            track_intervals = {(t.track_index, t.channel): list(whole_ivs) for t in self.tracks}
+            # Notes on tracks missing from self.tracks still need the same intervals
+            for item in self.session_items:
+                for n in item.midi_data.notes:
+                    track_intervals.setdefault((getattr(n, "track_index", 0), n.channel), list(whole_ivs))
+        return {"start": start, "end": end, "selected_tracks": None, "track_intervals": track_intervals}
+
+    @classmethod
+    def edge_autoscroll_speed(cls, x: float, width: float) -> float:
+        """Horizontal auto-scroll speed in px/s for a marquee drag with the pointer at widget x.
+
+        Zero away from the edges; ramps up inside the edge zone and keeps growing once the pointer is
+        dragged past the widget edge, capped at EDGE_SCROLL_MAX_SPEED. Negative scrolls left.
+        """
+        zone = cls.EDGE_SCROLL_ZONE
+        if width <= 2 * zone:
+            zone = max(4.0, width / 4.0)
+        if x < zone:
+            depth = zone - x
+            sign = -1.0
+        elif x > width - zone:
+            depth = x - (width - zone)
+            sign = 1.0
+        else:
+            return 0.0
+        ratio = depth / zone  # 0..1 inside the zone, >1 beyond the edge
+        speed = cls.EDGE_SCROLL_MIN_SPEED + (cls.EDGE_SCROLL_MAX_SPEED - cls.EDGE_SCROLL_MIN_SPEED) * min(1.0, (ratio ** 2) / 4.0)
+        return sign * min(cls.EDGE_SCROLL_MAX_SPEED, speed)
+
     def _setup_event_controllers(self):
         # Motion controller
         motion = Gtk.EventControllerMotion.new()
@@ -437,6 +555,21 @@ class TimelineCanvas(Gtk.DrawingArea):
         scroll = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.BOTH_AXES)
         scroll.connect("scroll", self._on_scroll)
         self.add_controller(scroll)
+
+        # Key-release events are lost when focus moves to a dialog (Ctrl+O, Ctrl+E), so
+        # forget held keys whenever the canvas loses focus.
+        focus = Gtk.EventControllerFocus.new()
+        focus.connect("leave", lambda *_: self._reset_held_keys())
+        self.add_controller(focus)
+
+    def _reset_held_keys(self):
+        self.ctrl_held = False
+        self.space_held = False
+        if self.scrub_active:
+            self.scrub_active = False
+            self.scrub_cursor_time = None
+            self.player.end_scrub()
+            self.queue_draw()
 
     def set_multi_track_mode(self, enabled: bool):
         if self.multi_track_mode != enabled:
@@ -777,10 +910,17 @@ class TimelineCanvas(Gtk.DrawingArea):
             self.ctrl_held = True
             return False
 
+        if keyval == Gdk.KEY_Menu or (keyval == Gdk.KEY_F10 and state & Gdk.ModifierType.SHIFT_MASK):
+            if self.on_context_menu:
+                self._set_context_from_point(self.hover_mouse_x, self.hover_mouse_y)
+                self.on_context_menu(self.hover_mouse_x, self.hover_mouse_y)
+                return True
+
         if keyval == Gdk.KEY_space:
             self.space_held = True
-            # Dorico model: Space while Ctrl is down starts scrubbed audition
-            is_ctrl = self.ctrl_held or bool(state & Gdk.ModifierType.CONTROL_MASK)
+            # Dorico model: Space while Ctrl is down starts scrubbed audition.
+            # Trust the event's modifier state, not ctrl_held (which can go stale).
+            is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
             if is_ctrl:
                 self.ctrl_held = True
                 self.scrub_active = True
@@ -1034,7 +1174,9 @@ class TimelineCanvas(Gtk.DrawingArea):
             return
 
         # 2. Main timeline / footer ruler
-        is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK) or getattr(self, "ctrl_held", False)
+        # Only the press event's own modifier state counts: a remembered key state goes stale when the
+        # Ctrl release lands in a dialog, which used to turn every press on a selection into a Ctrl-subtract.
+        is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
         is_shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         h = self._get_canvas_height()
         roll_bottom = h - self.FOOTER_HEIGHT
@@ -1087,31 +1229,94 @@ class TimelineCanvas(Gtk.DrawingArea):
         self.player.seek(t)
         self.queue_draw()
 
+    def _claim_press(self, gesture) -> bool:
+        """True the first time a button press is seen.
+
+        The click gesture and the drag gesture both receive every primary press (in either order),
+        so the press logic must run once per event rather than once per gesture.
+        """
+        ev = gesture.get_current_event() if hasattr(gesture, "get_current_event") else None
+        stamp = ev.get_time() if ev is not None else None
+        if stamp is not None and stamp == self._last_press_time:
+            return False
+        self._last_press_time = stamp
+        return True
+
+    def _handle_primary_press(self, gesture, x: float, y: float):
+        self.grab_focus()
+        if self.autoscroll_active:
+            self._stop_autoscroll()
+            self._drag_start_time = None
+            self._drag_start_y = None
+            self._drag_target_selection = False
+            self._drag_target_header = None
+            return
+        state = gesture.get_current_event_state() if hasattr(gesture, "get_current_event_state") else Gdk.ModifierType(0)
+        self._begin_pointer_interaction(x, y, state)
+
+    def _set_context_from_point(self, x: float, y: float):
+        """Remember what a context menu was opened over (time, lane, whether inside the selection)."""
+        t = self.x_to_time(x + self.hadj.get_value())
+        trk = self.get_track_at_y(y) if self.is_multi_track_view else None
+        self.context_time = t
+        self.context_track_key = (trk.track_index, trk.channel) if trk is not None else None
+        self.context_in_selection = bool(self.selection_range) and self.is_point_in_selection(t, y)
+
+    def _on_double_click(self, x: float, y: float, state: Gdk.ModifierType):
+        """Double-click a lane to select its whole track (the whole timeline in the unified view)."""
+        if y <= self.HEADER_HEIGHT:
+            return
+        trk = self.get_track_at_y(y) if self.is_multi_track_view else None
+        if trk is not None:
+            add = bool(state & Gdk.ModifierType.CONTROL_MASK)
+            self.select_whole_tracks({(trk.track_index, trk.channel)}, add=add, notify=True)
+        else:
+            self.select_all(notify=True)
+        # Cancel the marquee the first half of the double-click started; a drag that follows
+        # now drags the freshly selected track out.
+        self._drag_start_time = None
+        self._drag_start_y = None
+        self._drag_is_ctrl = False
+        self._drag_moved = False
+        self._drag_target_selection = self.selection_range is not None
+        self._stop_edge_scroll()
+        self.queue_draw()
+
     def _on_click_pressed(self, gesture, n_press, x, y):
         self.grab_focus()
         btn = gesture.get_current_button() if hasattr(gesture, "get_current_button") else 1
         if btn == 2:
-            self._click_press_handled = True
             if self.autoscroll_active:
                 self._stop_autoscroll()
             else:
                 self._start_autoscroll(x, y)
             return
 
-        if self.autoscroll_active:
-            self._click_press_handled = True
-            self._stop_autoscroll()
+        if btn == 3:
+            if self.autoscroll_active:
+                self._stop_autoscroll()
+                return
+            self._set_context_from_point(x, y)
+            if self.on_context_menu:
+                self.on_context_menu(x, y)
             return
 
-        state = gesture.get_current_event_state() if hasattr(gesture, "get_current_event_state") else Gdk.ModifierType(0)
-        self._click_press_handled = True
-        self._begin_pointer_interaction(x, y, state)
+        if btn not in (0, 1):
+            return
+
+        if self._claim_press(gesture):
+            self._handle_primary_press(gesture, x, y)
+
+        if n_press == 2:
+            state = gesture.get_current_event_state() if hasattr(gesture, "get_current_event_state") else Gdk.ModifierType(0)
+            self._on_double_click(x, y, state)
 
     def _on_drag_begin(self, gesture, start_x, start_y):
-        if not getattr(self, "_click_press_handled", False):
-            state = gesture.get_current_event_state() if hasattr(gesture, "get_current_event_state") else Gdk.ModifierType(0)
-            self._begin_pointer_interaction(start_x, start_y, state)
-        self._click_press_handled = False
+        if self._claim_press(gesture):
+            self._handle_primary_press(gesture, start_x, start_y)
+        if self._drag_start_time is not None:
+            self._marquee_pointer = (start_x, start_y)
+            self._start_edge_scroll()
 
     def _on_drag_update(self, gesture, offset_x, offset_y):
         if self._drag_start_time is None:
@@ -1119,19 +1324,67 @@ class TimelineCanvas(Gtk.DrawingArea):
         success, start_x, start_y = gesture.get_start_point()
         if not success:
             return
-        curr_x = start_x + offset_x
-        curr_y = start_y + offset_y
-        curr_world_x = curr_x + self.hadj.get_value()
-        curr_t = self.x_to_time(curr_world_x)
+        self._marquee_pointer = (start_x + offset_x, start_y + offset_y)
+        self._update_marquee_from_pointer()
+
+    def _update_marquee_from_pointer(self):
+        """Re-apply the marquee from the drag origin to the last pointer position (also after auto-scroll)."""
+        if self._drag_start_time is None or self._marquee_pointer is None:
+            return
+        curr_x, curr_y = self._marquee_pointer
+        curr_t = self.x_to_time(curr_x + self.hadj.get_value())
 
         t1 = min(self._drag_start_time, curr_t)
         t2 = max(self._drag_start_time, curr_t)
 
         if abs(t2 - t1) > 0.05:
             self._drag_moved = True
-            y_origin = self._drag_start_y if self._drag_start_y is not None else start_y
+            y_origin = self._drag_start_y if self._drag_start_y is not None else curr_y
             self._apply_drag_selection(t1, t2, y_origin, curr_y)
             self.queue_draw()
+
+    # --- Marquee edge auto-scroll ---
+
+    def _start_edge_scroll(self):
+        if self._edge_scroll_tick_id:
+            return
+        self._edge_scroll_last_frame = None
+        self._edge_scroll_tick_id = self.add_tick_callback(self._on_edge_scroll_tick)
+
+    def _stop_edge_scroll(self):
+        if self._edge_scroll_tick_id:
+            self.remove_tick_callback(self._edge_scroll_tick_id)
+            self._edge_scroll_tick_id = 0
+        self._edge_scroll_last_frame = None
+
+    def step_edge_autoscroll(self, dt: float) -> float:
+        """Advance marquee auto-scroll by dt seconds. Returns the horizontal scroll applied in px."""
+        if self._drag_start_time is None or self._marquee_pointer is None or not self._drag_moved:
+            return 0.0
+        width = float(self.get_width() or self.hadj.get_page_size() or 800.0)
+        speed = self.edge_autoscroll_speed(self._marquee_pointer[0], width)
+        if speed == 0.0:
+            return 0.0
+        old_val = self.hadj.get_value()
+        max_val = max(0.0, self.hadj.get_upper() - self.hadj.get_page_size())
+        new_val = max(0.0, min(max_val, old_val + speed * dt))
+        if new_val == old_val:
+            return 0.0
+        self.hadj.set_value(new_val)
+        self._update_marquee_from_pointer()
+        return new_val - old_val
+
+    def _on_edge_scroll_tick(self, widget, frame_clock):
+        if self._drag_start_time is None:
+            self._edge_scroll_tick_id = 0
+            self._edge_scroll_last_frame = None
+            return GLib.SOURCE_REMOVE
+        now = frame_clock.get_frame_time()
+        last = self._edge_scroll_last_frame
+        self._edge_scroll_last_frame = now
+        if last is not None:
+            self.step_edge_autoscroll(min(0.05, max(0.0, (now - last) / 1_000_000.0)))
+        return GLib.SOURCE_CONTINUE
 
     def _on_drag_end(self, gesture, offset_x, offset_y):
         if (
@@ -1165,7 +1418,8 @@ class TimelineCanvas(Gtk.DrawingArea):
                     self._recompute_selection_bounds(notify=True)
                     self.queue_draw()
 
-        self._click_press_handled = False
+        self._stop_edge_scroll()
+        self._marquee_pointer = None
         self._drag_start_time = None
         self._drag_start_y = None
         self._drag_is_ctrl = False

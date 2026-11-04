@@ -82,6 +82,10 @@ class PianolaWindow(Adw.ApplicationWindow):
         # Connect UI toggles
         self.btn_multi_track.connect("toggled", self._on_multi_track_toggled)
 
+        # Key releases go to whichever window has focus, so a dialog (Ctrl+O, Ctrl+E) or Alt+Tab
+        # swallows the Ctrl release; forget held keys whenever this window stops being active.
+        self.connect("notify::is-active", lambda *_: None if self.is_active() else self.canvas._reset_held_keys())
+
         # Register window actions
         self._setup_actions()
 
@@ -203,6 +207,9 @@ class PianolaWindow(Adw.ApplicationWindow):
             ("zoom_in", lambda *_: self.canvas.zoom_in()),
             ("zoom_out", lambda *_: self.canvas.zoom_out()),
             ("toggle_multi_track", self._on_action_toggle_multi_track),
+            ("select_all", self._on_action_select_all),
+            ("clear_selection", self._on_action_clear_selection),
+            ("select_tracks", self._on_action_select_tracks),
         ]
         for name, callback in actions:
             action = Gio.SimpleAction.new(name, None)
@@ -229,6 +236,99 @@ class PianolaWindow(Adw.ApplicationWindow):
     def _setup_drag_source(self):
         """Enable dragging marquee selection or active file directly from timeline into DAWs, Notation, or Nautilus."""
         self.canvas.on_request_drag_content = self._create_drag_content_provider
+        self.keyboard.on_request_drag_content = self._create_drag_content_provider
+        self.canvas.on_context_menu = self._show_canvas_context_menu
+        self.keyboard.on_context_menu = self._show_gutter_context_menu
+        self.context_menu: Optional[Gtk.PopoverMenu] = None
+
+    def build_selection_menu(self) -> Gio.Menu:
+        """Context menu for the timeline, built for the current selection and the lane under the pointer."""
+        canvas = self.canvas
+        has_sel = canvas.selection_range is not None
+        multi = canvas.is_multi_track_view
+        ctx_key = getattr(canvas, "context_track_key", None)
+        menu = Gio.Menu()
+
+        if has_sel:
+            edit = Gio.Menu()
+            edit.append(_("Copy"), "win.copy")
+            edit.append(_("Export Selection…"), "win.export")
+            edit.append(_("Play Selection"), "win.play_selection")
+            menu.append_section(None, edit)
+
+        select = Gio.Menu()
+        if multi:
+            sel_keys = canvas.selected_tracks if has_sel else None
+            if sel_keys and (ctx_key is None or ctx_key in sel_keys or getattr(canvas, "context_in_selection", False)):
+                label = _("Select Whole Track") if len(sel_keys) == 1 else _("Select Whole Tracks")
+            elif ctx_key is not None:
+                trk = next((t for t in canvas.tracks if (t.track_index, t.channel) == ctx_key), None)
+                label = _("Select Whole Track “{}”").format(trk.name) if trk and trk.name else _("Select Whole Track")
+            else:
+                label = None
+            if label:
+                select.append(label, "win.select_tracks")
+        select.append(_("Select All"), "win.select_all")
+        if has_sel:
+            select.append(_("Clear Selection"), "win.clear_selection")
+        menu.append_section(None, select)
+        return menu
+
+    def _popup_menu(self, parent: Gtk.Widget, x: float, y: float) -> Optional[Gtk.PopoverMenu]:
+        if not self.canvas.session_items:
+            return None
+        # A fresh popover per opening: swapping the model on a reused PopoverMenu keeps a stale
+        # size request and clips the longer menu.
+        old = getattr(self, "context_menu", None)
+        if old is not None:
+            old.popdown()
+        popover = Gtk.PopoverMenu.new_from_model(self.build_selection_menu())
+        popover.set_parent(parent)
+        popover.set_has_arrow(False)
+        popover.set_halign(Gtk.Align.START)
+        rect = Gdk.Rectangle()
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        popover.set_pointing_to(rect)
+
+        def _on_closed(p):
+            # Unparent after the activated menu action has run
+            GLib.idle_add(lambda: (p.unparent(), False)[1])
+            if getattr(self, "context_menu", None) is p:
+                self.context_menu = None
+
+        popover.connect("closed", _on_closed)
+        self.context_menu = popover
+        popover.popup()
+        return popover
+
+    def _show_canvas_context_menu(self, x: float, y: float):
+        self._popup_menu(self.canvas, x, y)
+
+    def _show_gutter_context_menu(self, x: float, y: float):
+        self._popup_menu(self.keyboard, x, y)
+
+    def _on_action_select_all(self, action, param):
+        self.canvas.select_all(notify=True)
+
+    def _on_action_clear_selection(self, action, param):
+        self.canvas.clear_selection(notify=True)
+        self.canvas.queue_draw()
+        self.keyboard.queue_draw()
+
+    def _on_action_select_tracks(self, action, param):
+        """Expand the selection to the whole length of its tracks (or of the lane the menu was opened on)."""
+        canvas = self.canvas
+        ctx_key = getattr(canvas, "context_track_key", None)
+        sel_keys = canvas.selected_tracks if canvas.selection_range is not None else None
+        if not canvas.is_multi_track_view:
+            canvas.select_all(notify=True)
+        elif sel_keys and (ctx_key is None or ctx_key in sel_keys or getattr(canvas, "context_in_selection", False)):
+            canvas.select_whole_tracks(set(sel_keys), notify=True)
+        elif ctx_key is not None:
+            canvas.select_whole_tracks({ctx_key}, notify=True)
+        else:
+            canvas.select_all(notify=True)
+        self.keyboard.queue_draw()
 
     def _collect_timeline_notes(self) -> List[NoteEvent]:
         all_notes: List[NoteEvent] = []
@@ -247,22 +347,34 @@ class PianolaWindow(Adw.ApplicationWindow):
         return all_notes
 
     def _export_active_selection_to_path(self, dest_path: str) -> Optional[str]:
-        sel = self.canvas.selection_range
-        if not sel:
+        spec = self.canvas.get_export_spec()
+        if not spec:
             return None
-        s_start, s_end = sel
-        all_notes = self._collect_timeline_notes()
-        sel_tracks = getattr(self.canvas, "selected_tracks", None) if getattr(self.canvas, "multi_track_mode", False) else None
-        track_intervals = self.canvas.get_effective_track_intervals() if getattr(self.canvas, "multi_track_mode", False) else None
         return self.archive_mgr.export_slice(
-            all_notes,
-            s_start,
-            s_end,
+            self._collect_timeline_notes(),
+            spec["start"],
+            spec["end"],
             dest_path,
-            selected_tracks=sel_tracks,
-            track_intervals=track_intervals,
+            selected_tracks=spec["selected_tracks"],
+            track_intervals=spec["track_intervals"],
             tracks_info=getattr(self.canvas, "tracks", None),
         )
+
+    def _selection_file_name(self) -> str:
+        """File name for a dragged/copied selection; whole tracks are named after the track."""
+        spec = self.canvas.get_export_spec()
+        s_start, s_end = spec["start"], spec["end"]
+        sel_tracks = spec["selected_tracks"]
+        if sel_tracks is not None and len(sel_tracks) == 1:
+            ti, ch = next(iter(sel_tracks))
+            if self.canvas.get_whole_selected_track_keys() == sel_tracks:
+                trk = next((t for t in self.canvas.tracks if (t.track_index, t.channel) == (ti, ch)), None)
+                name = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (trk.name if trk else "")).strip("_")
+                return f"Pianola_Track_{name or 'Track'}_T{ti + 1}_Ch{ch + 1}.mid"
+            return f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s_T{ti + 1}_Ch{ch + 1}.mid"
+        if sel_tracks is not None:
+            return f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s_{len(sel_tracks)}tracks.mid"
+        return f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s.mid"
 
     def _create_drag_content_provider(self, use_selection: bool = True, target_item = None):
         """Prepare rock-solid MIDI file provider for drag operation supporting GdkFileList, text/uri-list, audio/midi, and text/plain."""
@@ -275,16 +387,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         if use_selection and sel:
             # Marquee slice export (whole-range or per-track)
-            s_start, s_end = sel
-            sel_tracks = getattr(self.canvas, "selected_tracks", None) if getattr(self.canvas, "multi_track_mode", False) else None
-            track_suffix = ""
-            if sel_tracks is not None:
-                if len(sel_tracks) == 1:
-                    ti, ch = next(iter(sel_tracks))
-                    track_suffix = f"_T{ti + 1}_Ch{ch + 1}"
-                else:
-                    track_suffix = f"_{len(sel_tracks)}tracks"
-            final_path = os.path.join(export_dir, f"Pianola_Slice_{int(s_start)}s_{int(s_end)}s{track_suffix}.mid")
+            final_path = os.path.join(export_dir, self._selection_file_name())
             self._export_active_selection_to_path(final_path)
         else:
             if not target_item:
@@ -503,6 +606,8 @@ class PianolaWindow(Adw.ApplicationWindow):
             )
         else:
             self.lbl_selection.set_text("No selection")
+        if hasattr(self, "keyboard"):
+            self.keyboard.queue_draw()
 
     def _on_player_state_changed(self, is_playing: bool):
         GLib.idle_add(lambda: self.btn_play.set_icon_name(
@@ -537,7 +642,7 @@ class PianolaWindow(Adw.ApplicationWindow):
             self.minimap.queue_draw()
 
             # Auto-scroll canvas viewport if playhead approaches right edge
-            if not self.minimap.is_dragging and not self.canvas._drag_start_time:
+            if not self.minimap.is_dragging and self.canvas._drag_start_time is None:
                 hadj = self.canvas.hadj
                 cur_x = self.canvas.time_to_x(cur_t)
                 page_size = hadj.get_page_size()
@@ -782,7 +887,7 @@ class PianolaWindow(Adw.ApplicationWindow):
 
         sel = self.canvas.selection_range
         if sel:
-            dialog.set_initial_name("selection_slice.mid")
+            dialog.set_initial_name(self._selection_file_name())
         elif self.canvas.session_items:
             dialog.set_initial_name(os.path.basename(self.canvas.session_items[0].session.file_path))
 

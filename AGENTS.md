@@ -103,6 +103,8 @@ Takes flagged by the musician contain Standard MIDI Marker Meta-Events:
 * **Whole-Range & Per-Track Marquee Selection:**
   * In unified view (or when dragging on the bottom time ruler), dragging selects a time range across all tracks.
   * In Multi-Track view (`Ctrl+T`), dragging within a single track lane selects that time stretch on only that track; dragging vertically across several track lanes selects that stretch on each spanned track; `Ctrl`-drag (and `Ctrl`-click) adds or subtracts individual track stretches for finer multi-track selection; `Shift`-drag extends the active selection.
+* **Whole tracks & selection helpers:** Double-click a lane to select its whole track (the whole timeline in unified view). In Multi-Track view the left gutter shows one header per track: click selects the whole track (`Ctrl` adds/removes, `Shift` selects a range of tracks), dragging a header exports that track. `Ctrl+A` selects all, `Escape` clears. A marquee drag auto-scrolls when held near (or past) the left/right edge.
+* **Context menu:** Right-click (or `Menu` / `Shift+F10`) on the timeline or a track header: Copy, Export Selection…, Play Selection, Select Whole Track(s), Select All, Clear Selection.
 * **Copy (`Ctrl+C`) & Native Drag & Drop:** Musician can copy (`Ctrl+C`) or click and drag the selected track/range slice (or session header card) directly into Bitwig, Reaper, Ardour, Dorico/MuseScore, or Nautilus (`GdkFileList`, `text/uri-list`, `audio/midi`).
 * **Export Action:** Export button (`Ctrl+E`) to export the selected whole-range or per-track slice, or the active file, into a standalone `.mid` file (SMF Type 0 for single-track slices, SMF Type 1 with per-track instruments for multi-track slices).
 
