@@ -106,7 +106,7 @@ Takes flagged by the musician contain Standard MIDI Marker Meta-Events:
 * **Whole tracks & selection helpers:** Double-click a lane to select its whole track (the whole timeline in unified view). In Multi-Track view the left gutter shows one header per track: click selects the whole track (`Ctrl` adds/removes, `Shift` selects a range of tracks), dragging a header exports that track. `Ctrl+A` selects all, `Escape` clears. A marquee drag auto-scrolls when held near (or past) the left/right edge.
 * **Context menu:** Right-click (or `Menu` / `Shift+F10`) on the timeline or a track header: Copy, Export Selection…, Play Selection, Select Whole Track(s), Select All, Clear Selection.
 * **Copy (`Ctrl+C`) & Native Drag & Drop:** Musician can copy (`Ctrl+C`) or click and drag the selected track/range slice (or session header card) directly into Bitwig, Reaper, Ardour, Dorico/MuseScore, or Nautilus (`GdkFileList`, `text/uri-list`, `audio/midi`).
-* **Export Action:** Export button (`Ctrl+E`) to export the selected whole-range or per-track slice, or the active file, into a standalone `.mid` file (SMF Type 0 for single-track slices, SMF Type 1 with per-track instruments for multi-track slices).
+* **Export Action:** Export button (`Ctrl+E`) to export the selected whole-range or per-track slice, or the active file, into a standalone `.mid` file. Slices are always SMF Type 1: a conductor track (the source take's tempo and time signature) followed by one named track per instrument with its program change, the layout DAWs and notation programs write.
 
 ---
 

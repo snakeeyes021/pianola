@@ -350,14 +350,19 @@ class PianolaWindow(Adw.ApplicationWindow):
         spec = self.canvas.get_export_spec()
         if not spec:
             return None
+        # Carry the source take's tempo and time signature so bars line up in a DAW or notation program
+        item = self.canvas.get_session_at_time(spec["start"])
+        midi = item.midi_data if item is not None else None
         return self.archive_mgr.export_slice(
             self._collect_timeline_notes(),
             spec["start"],
             spec["end"],
             dest_path,
+            tempo_bpm=getattr(midi, "tempo_bpm", None) or 120.0,
             selected_tracks=spec["selected_tracks"],
             track_intervals=spec["track_intervals"],
             tracks_info=getattr(self.canvas, "tracks", None),
+            time_signature=getattr(midi, "time_signature", None),
         )
 
     def _selection_file_name(self) -> str:

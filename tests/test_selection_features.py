@@ -319,6 +319,66 @@ class TestExportSpec(unittest.TestCase):
         self.assertTrue(any(s >= 30.0 for s in starts))
 
 
+def smf_chunks(data: bytes):
+    """(format, [track bytes]) of an SMF file."""
+    import struct
+    assert data[:4] == b"MThd"
+    hlen, fmt, ntrks, _div = struct.unpack(">IHHH", data[4:14])
+    pos, tracks = 8 + hlen, []
+    while pos < len(data):
+        cid, ln = data[pos:pos + 4], struct.unpack(">I", data[pos + 4:pos + 8])[0]
+        if cid == b"MTrk":
+            tracks.append(data[pos + 8:pos + 8 + ln])
+        pos += 8 + ln
+    assert len(tracks) == ntrks
+    return fmt, tracks
+
+
+class TestSliceFileLayout(unittest.TestCase):
+    """Slices are written like the source file and DAW exports (Dorico ignored the old bare Type 0 slices)."""
+
+    def _write(self, keys, ts=(3, 2, 24, 8), bpm=90.0):
+        midi = two_track_session()._cached_midi
+        notes = [n for n in midi.notes if (n.track_index, n.channel) in keys and n.start_time < 10]
+        return MidiParser.write_notes_to_bytes(notes, tempo_bpm=bpm, tracks_info=midi.tracks, time_signature=ts)
+
+    def test_single_track_slice_is_type1_with_conductor_track(self):
+        fmt, tracks = smf_chunks(self._write({VIOLIN}))
+        self.assertEqual(fmt, 1)
+        self.assertEqual(len(tracks), 2)
+        conductor, violin = tracks
+        self.assertIn(b"\xFF\x51\x03", conductor)              # tempo
+        self.assertIn(b"\xFF\x58\x04\x03\x02\x18\x08", conductor)  # source time signature (3/4)
+        self.assertNotIn(b"\x91", conductor)                    # no notes in the conductor track
+        self.assertIn(b"\xFF\x03\x06Violin", violin)
+        self.assertIn(bytes([0xC1, 40]), violin)                # program change on the violin's channel
+        self.assertTrue(conductor.endswith(b"\xFF\x2F\x00") and violin.endswith(b"\xFF\x2F\x00"))
+
+    def test_multi_track_slice_has_one_track_per_instrument(self):
+        fmt, tracks = smf_chunks(self._write({VIOLIN, PIANO}))
+        self.assertEqual((fmt, len(tracks)), (1, 3))
+        self.assertIn(b"Violin", tracks[1])
+        self.assertIn(b"Piano", tracks[2])
+
+    def test_default_time_signature_and_round_trip(self):
+        data = self._write({PIANO}, ts=None, bpm=120.0)
+        _, tracks = smf_chunks(data)
+        self.assertIn(b"\xFF\x58\x04\x04\x02\x18\x08", tracks[0])  # 4/4 when the source has none
+        tmp = tempfile.mkdtemp(prefix="pianola-ts-")
+        try:
+            path = os.path.join(tmp, "x.mid")
+            with open(path, "wb") as f:
+                f.write(self._write({PIANO}, ts=(6, 3, 24, 8), bpm=100.0))
+            md = MidiParser.parse_file(path)
+            self.assertEqual(md.time_signature, (6, 3, 24, 8))
+            self.assertAlmostEqual(md.tempo_bpm, 100.0, places=1)
+            self.assertEqual([t.name for t in md.tracks], ["Piano"])
+            self.assertEqual(len(md.notes), 5)
+            self.assertAlmostEqual(md.notes[0].start_time, 0.5, places=2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TestEdgeAutoscroll(unittest.TestCase):
     def test_speed_profile(self):
         speed = TimelineCanvas.edge_autoscroll_speed

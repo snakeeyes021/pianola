@@ -198,6 +198,7 @@ class MidiData:
     sections: List[Section] = field(default_factory=list)
     tempo_bpm: float = 120.0
     key_signature: Optional[str] = None
+    time_signature: Optional[Tuple[int, int, int, int]] = None  # raw 0xFF 0x58 payload (nn, dd, cc, bb)
     tracks: List[TrackInfo] = field(default_factory=list)
     program_changes: List[Tuple[float, int, int]] = field(default_factory=list)  # (time_sec, channel, program)
 GM_PROGRAM_NAMES = (
@@ -408,6 +409,9 @@ class MidiParser:
                         # Marker
                         text = meta_bytes.decode("utf-8", errors="replace")
                         raw_events.append((curr_tick, 1, "marker", text))
+                    elif meta_type == 0x58 and meta_len >= 4:
+                        # Time Signature: numerator, denominator power of two, MIDI clocks per click, 32nds per quarter
+                        raw_events.append((curr_tick, 0, "time_signature", tuple(meta_bytes[:4])))
                     elif meta_type == 0x59 and meta_len >= 2:
                         # Key Signature
                         sf, mi = struct.unpack("bb", meta_bytes[:2])
@@ -466,6 +470,7 @@ class MidiParser:
 
         initial_bpm = 120.0
         bpm_set = False
+        time_signature: Optional[Tuple[int, int, int, int]] = None
 
         for tick, _, etype, payload in raw_events:
             delta_ticks = tick - last_tick
@@ -480,6 +485,9 @@ class MidiParser:
                 if not bpm_set:
                     initial_bpm = bpm
                     bpm_set = True
+            elif etype == "time_signature":
+                if time_signature is None:
+                    time_signature = payload
             elif etype == "track_name":
                 trk_idx, name = payload
                 track_names[trk_idx] = name
@@ -601,6 +609,7 @@ class MidiParser:
             markers=markers,
             sections=sections,
             tempo_bpm=initial_bpm,
+            time_signature=time_signature,
             tracks=tracks,
             program_changes=program_changes
         )
@@ -651,8 +660,9 @@ class MidiParser:
         tempo_bpm: float = 120.0,
         time_offset: float = 0.0,
         tracks_info: Optional[List[TrackInfo]] = None,
+        time_signature: Optional[Tuple[int, int, int, int]] = None,
     ) -> bytes:
-        """Encode note events to Standard MIDI File bytes (Type 0 for single-track, Type 1 for multi-track)."""
+        """Encode note events as an SMF Type 1 file: a conductor track, then one track per (track, channel)."""
         ticks_per_quarter = 480
         mpqn = int(round(60_000_000.0 / max(10.0, tempo_bpm)))
         seconds_per_tick = (mpqn / 1_000_000.0) / ticks_per_quarter
@@ -673,60 +683,53 @@ class MidiParser:
 
         sorted_keys = sorted(groups.keys(), key=lambda k: (k[0], k[1]))
 
-        def _encode_track_chunk(
-            track_notes: List[NoteEvent],
-            include_tempo: bool,
-            t_info: Optional[TrackInfo] = None,
-        ) -> bytes:
-            raw = []
-            if include_tempo:
-                raw.append((0, 0, b"\xFF\x51\x03" + tempo_payload))
+        def _chunk(raw) -> bytes:
+            raw.sort(key=lambda x: (x[0], x[1]))
+            track_bytes = bytearray()
+            last_tick = 0
+            for tick, _, payload in raw:
+                track_bytes.extend(cls._write_vlq(tick - last_tick))
+                track_bytes.extend(payload)
+                last_tick = tick
+            return struct.pack(">4sI", b"MTrk", len(track_bytes)) + bytes(track_bytes)
 
+        def _note_events(track_notes: List[NoteEvent]):
+            raw = []
+            for n in track_notes:
+                rel_start = max(0.0, n.start_time - time_offset)
+                rel_end = max(rel_start + 0.01, n.end_time - time_offset)
+                start_tick = int(round(rel_start / seconds_per_tick))
+                end_tick = int(round(rel_end / seconds_per_tick))
+                ch = n.channel & 0x0F
+                raw.append((start_tick, 2, bytes([0x90 | ch, n.pitch & 0x7F, n.velocity & 0x7F])))  # Note On
+                raw.append((end_tick, 1, bytes([0x80 | ch, n.pitch & 0x7F, 0])))  # Note Off
+            return raw
+
+        note_tracks = []
+        for key in sorted_keys:
+            raw = []
+            t_info = info_map.get(key)
             if t_info is not None:
                 if t_info.name:
                     name_bytes = t_info.name.encode("utf-8")
                     raw.append((0, 0, b"\xFF\x03" + cls._write_vlq(len(name_bytes)) + name_bytes))
-                ch_init = t_info.channel & 0x0F
-                prog_init = max(0, min(127, t_info.program))
-                raw.append((0, 0, bytes([0xC0 | ch_init, prog_init])))
+                raw.append((0, 0, bytes([0xC0 | (t_info.channel & 0x0F), max(0, min(127, t_info.program))])))
+            raw.extend(_note_events(groups[key]))
+            note_tracks.append(raw)
+        end_tick = max((e[0] for raw in note_tracks for e in raw), default=0)
 
-            for n in track_notes:
-                rel_start = max(0.0, n.start_time - time_offset)
-                rel_end = max(rel_start + 0.01, n.end_time - time_offset)
-
-                start_tick = int(round(rel_start / seconds_per_tick))
-                end_tick = int(round(rel_end / seconds_per_tick))
-                ch = n.channel & 0x0F
-
-                # Note On
-                raw.append((start_tick, 2, bytes([0x90 | ch, n.pitch & 0x7F, n.velocity & 0x7F])))
-                # Note Off
-                raw.append((end_tick, 1, bytes([0x80 | ch, n.pitch & 0x7F, 0])))
-
-            max_tick = max([e[0] for e in raw], default=0)
-            raw.append((max_tick, 3, b"\xFF\x2F\x00"))
-            raw.sort(key=lambda x: (x[0], x[1]))
-
-            track_bytes = bytearray()
-            last_tick = 0
-            for tick, _, payload in raw:
-                delta = tick - last_tick
-                track_bytes.extend(cls._write_vlq(delta))
-                track_bytes.extend(payload)
-                last_tick = tick
-
-            return struct.pack(">4sI", b"MTrk", len(track_bytes)) + bytes(track_bytes)
-
-        if len(sorted_keys) <= 1:
-            t_info = info_map.get(sorted_keys[0]) if sorted_keys else None
-            chunk = _encode_track_chunk(notes, include_tempo=True, t_info=t_info)
-            header = struct.pack(">4sIHHH", b"MThd", 6, 0, 1, ticks_per_quarter)
-            return header + chunk
-
-        chunks = []
-        for idx, key in enumerate(sorted_keys):
-            t_info = info_map.get(key)
-            chunks.append(_encode_track_chunk(groups[key], include_tempo=(idx == 0), t_info=t_info))
+        # Always SMF Type 1: a conductor track (tempo, time signature) followed by one named track per
+        # instrument, the layout DAWs and notation programs write and the one Dorico imports reliably.
+        ts = tuple(time_signature) if time_signature and len(time_signature) >= 4 else (4, 2, 24, 8)
+        conductor = [
+            (0, 0, b"\xFF\x51\x03" + tempo_payload),
+            (0, 0, b"\xFF\x58\x04" + bytes(max(0, min(255, int(v))) for v in ts[:4])),
+            (end_tick, 3, b"\xFF\x2F\x00"),
+        ]
+        chunks = [_chunk(conductor)]
+        for raw in note_tracks:
+            raw.append((end_tick, 3, b"\xFF\x2F\x00"))
+            chunks.append(_chunk(raw))
 
         header = struct.pack(">4sIHHH", b"MThd", 6, 1, len(chunks), ticks_per_quarter)
         return header + b"".join(chunks)
@@ -739,13 +742,15 @@ class MidiParser:
         tempo_bpm: float = 120.0,
         time_offset: float = 0.0,
         tracks_info: Optional[List[TrackInfo]] = None,
+        time_signature: Optional[Tuple[int, int, int, int]] = None,
     ):
-        """Write note events to a Standard MIDI File (Type 0 for single-track, Type 1 for multi-track).
+        """Write note events to a Standard MIDI File (Type 1, see write_notes_to_bytes).
 
         Adjusts start times by subtracting time_offset.
         """
         midi_bytes = cls.write_notes_to_bytes(
-            notes, tempo_bpm=tempo_bpm, time_offset=time_offset, tracks_info=tracks_info
+            notes, tempo_bpm=tempo_bpm, time_offset=time_offset, tracks_info=tracks_info,
+            time_signature=time_signature,
         )
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         with open(output_path, "wb") as f:
@@ -1041,6 +1046,7 @@ class ArchiveManager:
         selected_tracks: Optional[Set[Tuple[int, int]]] = None,
         track_intervals: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]] = None,
         tracks_info: Optional[List[TrackInfo]] = None,
+        time_signature: Optional[Tuple[int, int, int, int]] = None,
     ) -> str:
         """Slice notes overlapping [start_time, end_time] (optionally filtered per track) and export to a MIDI file."""
         sliced_notes = []
@@ -1080,6 +1086,7 @@ class ArchiveManager:
             tempo_bpm=tempo_bpm,
             time_offset=start_time,
             tracks_info=filtered_info,
+            time_signature=time_signature,
         )
         return dest_path
 

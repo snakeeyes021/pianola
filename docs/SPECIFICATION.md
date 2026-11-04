@@ -36,7 +36,7 @@ Pianola (`tech.redfoxlabs.Pianola`) is a modern, lightweight, HIG-compliant GNOM
   * `Shift + Click/Drag`: Extend or contract selection boundaries.
   * `Ctrl + Drag` / `Ctrl + Click`: Add or subtract individual track stretches or non-contiguous tracks for fine-grained multi-track selection.
 * **Copy (`Ctrl+C`) & DAW Drag & Drop:** Musician can press `Ctrl+C` or click and drag the selected stretch (or whole session card) directly out of Pianola and drop/paste into Bitwig Studio, Reaper, Ardour, Dorico, MuseScore, or Nautilus (`GdkFileList`, `text/uri-list`, `audio/midi`).
-* **Direct Export:** An **Export** button (`Ctrl+E`) exports the selected whole-range or per-track slice (SMF Type 0 for a single track, SMF Type 1 preserving track names and program changes for multiple tracks) or the active file into a standalone `.mid` file.
+* **Direct Export:** An **Export** button (`Ctrl+E`) exports the selected whole-range or per-track slice (SMF Type 1: a conductor track with the source tempo and time signature, then one track per instrument preserving track names and program changes) or the active file into a standalone `.mid` file.
 
 ---
 
