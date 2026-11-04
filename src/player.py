@@ -24,7 +24,7 @@ import threading
 from typing import List, Optional, Set, Callable
 from dataclasses import dataclass
 
-from .archive import NoteEvent, Section, MidiData
+from .archive import NoteEvent, Section, MidiData, get_midikeep_dir
 
 
 # Standard SoundFont search paths
@@ -143,7 +143,8 @@ class FluidSynthEngine(BaseSynth):
         # Locate soundfont
         sf_to_load = soundfont_path
         if not sf_to_load:
-            for p in DEFAULT_SOUNDFONT_PATHS:
+            search_paths = [os.path.join(get_midikeep_dir(), "soundfonts", "default.sf2")] + DEFAULT_SOUNDFONT_PATHS
+            for p in search_paths:
                 if os.path.exists(p):
                     sf_to_load = p
                     break

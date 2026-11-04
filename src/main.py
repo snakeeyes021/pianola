@@ -39,6 +39,7 @@ class PianolaApplication(Adw.Application):
 
         # Window accelerators
         self.set_accels_for_action("win.open", ['<control>o'])
+        self.set_accels_for_action("win.copy", ['<control>c'])
         self.set_accels_for_action("win.export", ['<control>e'])
         self.set_accels_for_action("win.play_pause", ['space'])
         self.set_accels_for_action("win.play_selection", ['p'])
@@ -49,6 +50,8 @@ class PianolaApplication(Adw.Application):
         self.set_accels_for_action("win.zoom_in", ['<control>plus', '<control>equal'])
         self.set_accels_for_action("win.zoom_out", ['<control>minus'])
         self.set_accels_for_action("win.toggle_multi_track", ['<control>t'])
+        self.set_accels_for_action("win.select_all", ['<control>a'])
+        self.set_accels_for_action("win.clear_selection", ['Escape'])
 
     def _load_css(self):
         if getattr(self, '_css_loaded', False):

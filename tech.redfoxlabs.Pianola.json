@@ -11,10 +11,11 @@
         "--device=dri",
         "--socket=wayland",
         "--socket=pulseaudio",
+        "--filesystem=xdg-config/midikeep:ro",
         "--filesystem=xdg-data/midikeep:create",
         "--filesystem=xdg-cache/pianola:create",
         "--filesystem=xdg-data/soundfonts:ro",
-        "--filesystem=home:ro"
+        "--filesystem=home"
     ],
     "cleanup": [
         "/include",

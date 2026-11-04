@@ -28,13 +28,15 @@ Pianola (`tech.redfoxlabs.Pianola`) is a modern, lightweight, HIG-compliant GNOM
   * Jump to beginning of **Year**
   * Jump to beginning of **Archive** (earliest recorded take)
 
-### 1.4 Marquee Selection & Exporting
-* **Range Selection:** Click and drag across the timeline to establish a time-range selection.
-* **Selection Modifiers:** Support standard modifier keys:
+### 1.4 Marquee Selection, Per-Track Selection, Copy & Exporting
+* **Whole-Range & Per-Track Selection:**
+  * In unified view (or when dragging along the bottom time ruler), click and drag selects a time range across all tracks.
+  * In Multi-Track view (`Ctrl+T`), dragging inside a single track lane selects that time stretch on only that track. Dragging vertically across several lanes selects that stretch on each spanned track.
+* **Selection Modifiers:**
   * `Shift + Click/Drag`: Extend or contract selection boundaries.
-  * `Ctrl + Click`: Multi-region or union selection adjustments.
-* **DAW Drag & Drop:** Musician can click and drag the selected range (or whole session card) directly out of Pianola and drop into Bitwig Studio, Reaper, Ardour, MuseScore, or Nautilus (`text/uri-list` with rendered `.mid`).
-* **Direct Export:** An **Export** button (`Ctrl+E`) allows exporting the selected time range (marquee slice), the active file, or multiple selected files at once directly into standalone `.mid` file(s).
+  * `Ctrl + Drag` / `Ctrl + Click`: Add or subtract individual track stretches or non-contiguous tracks for fine-grained multi-track selection.
+* **Copy (`Ctrl+C`) & DAW Drag & Drop:** Musician can press `Ctrl+C` or click and drag the selected stretch (or whole session card) directly out of Pianola and drop/paste into Bitwig Studio, Reaper, Ardour, Dorico, MuseScore, or Nautilus (`GdkFileList`, `text/uri-list`, `audio/midi`).
+* **Direct Export:** An **Export** button (`Ctrl+E`) exports the selected whole-range or per-track slice (SMF Type 1: a conductor track with the source tempo and time signature, then one track per instrument preserving track names and program changes) or the active file into a standalone `.mid` file.
 
 ---
 
@@ -44,10 +46,13 @@ Pianola (`tech.redfoxlabs.Pianola`) is a modern, lightweight, HIG-compliant GNOM
 
 ## 2. Midikeep Storage & Journaling Integration
 
-* **Data Directory:** `~/.local/share/midikeep/` (or `$XDG_DATA_HOME/midikeep`)
-* **Index Database:** `~/.local/share/midikeep/index.db` (`sessions` table)
-* **Crash & Live Journal:** `~/.local/share/midikeep/journal/` (live-recording state detection)
-* **Session Takes:** `~/.local/share/midikeep/sessions/YYYY/MM/DD/session_HH-MM-SS.mid`
+* **Shared Configuration File:** `~/.config/midikeep/config.yaml` (or `$XDG_CONFIG_HOME/midikeep/config.yaml`, overridable via `$MIDIKEEP_CONFIG`)
+  * Shared between `midikeep-daemon`, the `midikeep` CLI, and Pianola.
+  * Reads `data_dir` (with `~` and environment variable expansion) to locate the Midikeep archive, falling back to `$XDG_DATA_HOME/midikeep` / `~/.local/share/midikeep/` if unset or if the config file is absent.
+* **Data Directory:** `<data_dir>` (default `~/.local/share/midikeep/` or `$XDG_DATA_HOME/midikeep`)
+* **Index Database:** `<data_dir>/index.db` (`sessions` table)
+* **Crash & Live Journal:** `<data_dir>/journal/` (live-recording state detection)
+* **Session Takes:** `<data_dir>/sessions/YYYY-MM/YYYY-MM-DD_HHMMSS_<device>.mid` (or `sessions/YYYY/MM/DD/...`)
 * **Clapper Markers:** Standard MIDI Marker Meta-Events (`0xFF 0x06 <len> <text>`). Rendered as visual chips on the timeline; clicking a chip seeks playback directly to the marker.
 * **Starring:** Toggles `starred` boolean directly in `index.db`.
 

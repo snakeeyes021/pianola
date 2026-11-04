@@ -15,11 +15,25 @@
 ## 2. Backend Storage Context: Midikeep
 Pianola is the official graphical companion to **Midikeep** (`midikeep-daemon`), the background MIDI recording engine on RedFoxOS.
 
-### Storage Layout (XDG Compliant)
-* **Root Data Directory:** `~/.local/share/midikeep/` (or `$XDG_DATA_HOME/midikeep`)
-* **Index Database:** `~/.local/share/midikeep/index.db`
-* **Recorded Takes:** `~/.local/share/midikeep/sessions/YYYY/MM/DD/session_HH-MM-SS.mid`
-* **Crash & Live Journal:** `~/.local/share/midikeep/journal/`
+### Storage Layout & Shared Configuration (XDG Compliant)
+* **Shared Configuration File:** `~/.config/midikeep/config.yaml` (or `$XDG_CONFIG_HOME/midikeep/config.yaml`, overridable via `$MIDIKEEP_CONFIG`).
+  * Both `midikeep` (`midikeep-daemon` / `midikeep` CLI) and Pianola share this YAML configuration file.
+  * When `data_dir` is set in `config.yaml` (supporting `~` and `$ENV` expansion), Pianola reads the archive from that directory; otherwise it falls back to `$XDG_DATA_HOME/midikeep` / `~/.local/share/midikeep/`.
+  * Example `~/.config/midikeep/config.yaml`:
+    ```yaml
+    data_dir: ~/.local/share/midikeep
+    silence_threshold_seconds: 300
+    log_midi_clock: false
+    tempo_bpm: 120
+    division: 480
+    journal_interval_seconds: 5
+    auto_connect: true
+    device_blacklist: []
+    ```
+* **Root Data Directory:** Configured `data_dir`, or `~/.local/share/midikeep/` (`$XDG_DATA_HOME/midikeep`) by default
+* **Index Database:** `<data_dir>/index.db`
+* **Recorded Takes:** `<data_dir>/sessions/YYYY-MM/YYYY-MM-DD_HHMMSS_<device>.mid` (or `sessions/YYYY/MM/DD/...`)
+* **Crash & Live Journal:** `<data_dir>/journal/`
 
 ### SQLite Schema (`index.db`)
 ```sql
@@ -53,9 +67,9 @@ Takes flagged by the musician contain Standard MIDI Marker Meta-Events:
 
 ### 3.1 Launch & Initial State
 1. **Default View (Auto-Discovery):**
-   * On launch, Pianola checks for the existence of `~/.local/share/midikeep/index.db`.
+   * On launch, Pianola resolves `<data_dir>` from `~/.config/midikeep/config.yaml` (falling back to `~/.local/share/midikeep/`) and checks for `<data_dir>/index.db`.
    * **If the Midikeep archive exists and no specific file was passed on the command line:** Pianola immediately opens into the **Archive Timeline View** by default, as if the entire archive was the file the user intended to open.
-   * **Default Start Location:** Timeline positions at the beginning of the **last session** (if a session is actively being recorded in `~/.local/share/midikeep/journal/`, jump to that active session; otherwise, jump to the most recent complete session in `index.db`).
+   * **Default Start Location:** Timeline positions at the beginning of the **last session** (if a session is actively being recorded in `<data_dir>/journal/`, jump to that active session; otherwise, jump to the most recent complete session in `index.db`).
 2. **Single File Player Mode:**
    * If launched with a file argument (e.g. `pianola /path/to/take.mid` or double-clicking a `.mid` in Nautilus), Pianola opens that single file directly in the player view.
    * A "Open File..." menu action / shortcut (`Ctrl+O`) allows loading any external `.mid` file at any time.
@@ -85,10 +99,14 @@ Takes flagged by the musician contain Standard MIDI Marker Meta-Events:
 * **Clapper Chips:** Visual markers on the timeline scrub bar; clicking jumps to the marker.
 * **Starring:** Toggles `starred = 1 / 0` in `index.db`.
 
-### 3.4 Marquee Selection, Drag & Drop, and Export
-* **Marquee Selection:** Click and drag across the timeline with standard `Shift` (extend) and `Ctrl` (modify) shortcuts to select a time span across files or within a take.
-* **Native Drag & Drop:** Musician can click and drag the selected range or session card directly into Bitwig, Reaper, Ardour, Dorico/MuseScore, or Nautilus (`text/uri-list`).
-* **Export Action:** Export button (`Ctrl+E`) to export the selected time range (marquee slice), the active file, or multiple selected files at once into standalone `.mid` file(s).
+### 3.4 Marquee Selection, Per-Track Selection, Copy, Drag & Drop, and Export
+* **Whole-Range & Per-Track Marquee Selection:**
+  * In unified view (or when dragging on the bottom time ruler), dragging selects a time range across all tracks.
+  * In Multi-Track view (`Ctrl+T`), dragging within a single track lane selects that time stretch on only that track; dragging vertically across several track lanes selects that stretch on each spanned track; `Ctrl`-drag (and `Ctrl`-click) adds or subtracts individual track stretches for finer multi-track selection; `Shift`-drag extends the active selection.
+* **Whole tracks & selection helpers:** Double-click a lane to select its whole track (the whole timeline in unified view). In Multi-Track view the left gutter shows one header per track: click selects the whole track (`Ctrl` adds/removes, `Shift` selects a range of tracks), dragging a header exports that track. `Ctrl+A` selects all, `Escape` clears. A marquee drag auto-scrolls when held near (or past) the left/right edge.
+* **Context menu:** Right-click (or `Menu` / `Shift+F10`) on the timeline or a track header: Copy, Export Selection…, Play Selection, Select Whole Track(s), Select All, Clear Selection.
+* **Copy (`Ctrl+C`) & Native Drag & Drop:** Musician can copy (`Ctrl+C`) or click and drag the selected track/range slice (or session header card) directly into Bitwig, Reaper, Ardour, Dorico/MuseScore, or Nautilus (`GdkFileList`, `text/uri-list`, `audio/midi`).
+* **Export Action:** Export button (`Ctrl+E`) to export the selected whole-range or per-track slice, or the active file, into a standalone `.mid` file. Slices are always SMF Type 1: a conductor track (the source take's tempo and time signature) followed by one named track per instrument with its program change, the layout DAWs and notation programs write.
 
 ---
 
@@ -102,8 +120,9 @@ To work inside the Flatpak sandbox, ensure the following permissions are present
     "--socket=wayland",
     "--device=dri",
     "--socket=pulseaudio",
-    "--filesystem=xdg-data/midikeep:rw",
-    "--filesystem=home:ro"
+    "--filesystem=xdg-config/midikeep:ro",
+    "--filesystem=xdg-data/midikeep:create",
+    "--filesystem=home"
 ]
 ```
 And add modules for `fluidsynth` and a GM SoundFont (e.g. `soundfont-fluid-gm` or `GeneralUser GS`).

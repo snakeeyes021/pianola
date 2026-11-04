@@ -21,24 +21,165 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Set
+
+try:
+    import yaml as _yaml
+except ImportError:
+    _yaml = None
 
 
-def get_midikeep_dir() -> str:
-    """Return the Midikeep storage root directory."""
-    # 1. Check standard host/flatpak mounted path (~/.local/share/midikeep)
-    user_midikeep = os.path.expanduser("~/.local/share/midikeep")
-    if os.path.exists(os.path.join(user_midikeep, "index.db")):
-        return user_midikeep
+def get_midikeep_config_path(config_path: Optional[str] = None) -> str:
+    """Return the path to the shared Midikeep config.yaml file."""
+    if config_path:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(config_path)))
 
-    # 2. Check XDG_DATA_HOME (if set to custom directory on host)
+    env_cfg = os.environ.get("MIDIKEEP_CONFIG")
+    if env_cfg:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(env_cfg)))
+
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config:
+        xdg_candidate = os.path.join(os.path.expanduser(xdg_config), "midikeep", "config.yaml")
+        if os.path.exists(xdg_candidate):
+            return xdg_candidate
+        # Outside Flatpak per-app sandbox dirs, honor XDG_CONFIG_HOME directly
+        if "/.var/app/" not in xdg_config and not os.environ.get("FLATPAK_ID"):
+            return xdg_candidate
+
+    return os.path.expanduser("~/.config/midikeep/config.yaml")
+
+
+def _strip_yaml_inline_comment(val: str) -> str:
+    """Strip unquoted inline YAML comments (# ...)."""
+    in_single = False
+    in_double = False
+    for i, ch in enumerate(val):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            if i == 0 or val[i - 1].isspace():
+                return val[:i].rstrip()
+    return val
+
+
+def load_midikeep_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load Midikeep's shared config.yaml if present, falling back to {} on error or absence."""
+    resolved_path = get_midikeep_config_path(config_path)
+    if not resolved_path or not os.path.isfile(resolved_path):
+        return {}
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+    except Exception:
+        return {}
+
+    if _yaml is not None:
+        try:
+            loaded = _yaml.safe_load(raw_text)
+            if isinstance(loaded, dict):
+                return loaded
+            return {}
+        except Exception:
+            pass
+
+    # Zero-dependency fallback parser for simple key: value YAML files
+    data: Dict[str, Any] = {}
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+        # Only parse top-level keys (no leading indentation)
+        if line[0].isspace():
+            continue
+        k, v = stripped.split(":", 1)
+        k = k.strip()
+        v = _strip_yaml_inline_comment(v.strip())
+        if not k:
+            continue
+        if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+            data[k] = v[1:-1]
+        elif v == "" or v == "~" or v.lower() == "null":
+            data[k] = None
+        elif v.lower() == "true":
+            data[k] = True
+        elif v.lower() == "false":
+            data[k] = False
+        else:
+            try:
+                data[k] = float(v) if "." in v else int(v)
+            except ValueError:
+                data[k] = v
+    return data
+
+
+def _in_flatpak() -> bool:
+    return bool(os.environ.get("FLATPAK_ID")) or os.path.exists("/.flatpak-info")
+
+
+def host_visible_path(path: str) -> str:
+    """Return a path to the same file that other apps (outside this Flatpak sandbox) can open.
+
+    A Flatpak grant such as ``--filesystem=xdg-data/midikeep`` also bind-mounts the host's
+    ``~/.local/share/midikeep`` onto the app's private ``~/.var/app/<id>/data/midikeep``. Paths under
+    that private directory only exist inside the sandbox: handed to a drop target (a DAW under Wine,
+    Nautilus) they point at an empty directory. Map them back to the host location, but only when it
+    is provably the same file. Outside Flatpak, or when no mapping applies, the path is returned as is.
+    """
+    if not path or not _in_flatpak():
+        return path
+    home = os.path.expanduser("~")
+    pairs = (
+        ("XDG_DATA_HOME", os.path.join(home, ".local", "share")),
+        ("XDG_CONFIG_HOME", os.path.join(home, ".config")),
+        ("XDG_CACHE_HOME", os.path.join(home, ".cache")),
+        ("XDG_STATE_HOME", os.path.join(home, ".local", "state")),
+    )
+    abs_path = os.path.abspath(path)
+    for var, host_dir in pairs:
+        sandbox_dir = os.environ.get(var)
+        if not sandbox_dir:
+            continue
+        sandbox_dir = os.path.abspath(os.path.expanduser(sandbox_dir))
+        host_dir = os.path.abspath(host_dir)
+        if sandbox_dir == host_dir or not (abs_path == sandbox_dir or abs_path.startswith(sandbox_dir + os.sep)):
+            continue
+        candidate = os.path.join(host_dir, os.path.relpath(abs_path, sandbox_dir))
+        try:
+            if os.path.exists(candidate) and os.path.samefile(candidate, abs_path):
+                return candidate
+        except OSError:
+            pass
+    return path
+
+
+def get_midikeep_dir(config_path: Optional[str] = None) -> str:
+    """Return the Midikeep storage root directory, reading shared config.yaml first.
+
+    Inside Flatpak the result is always a host-visible path (see host_visible_path), because files
+    under it are handed to other apps on drag-and-drop and copy.
+    """
+    # 1. Check shared config (~/.config/midikeep/config.yaml or $XDG_CONFIG_HOME/midikeep/config.yaml)
+    cfg = load_midikeep_config(config_path)
+    configured_dir = cfg.get("data_dir") or cfg.get("archive_dir")
+    if isinstance(configured_dir, str) and configured_dir.strip():
+        expanded = os.path.expanduser(os.path.expandvars(configured_dir.strip()))
+        return host_visible_path(os.path.abspath(expanded))
+
+    # 2. Check XDG_DATA_HOME (outside Flatpak per-app sandbox dirs, or if index.db exists there)
     xdg_data = os.environ.get("XDG_DATA_HOME")
     if xdg_data:
-        candidate = os.path.join(xdg_data, "midikeep")
+        candidate = os.path.abspath(os.path.join(os.path.expanduser(xdg_data), "midikeep"))
         if os.path.exists(os.path.join(candidate, "index.db")):
+            return host_visible_path(candidate)
+        if "/.var/app/" not in xdg_data and not os.environ.get("FLATPAK_ID"):
             return candidate
 
-    return user_midikeep
+    # 3. Default to ~/.local/share/midikeep
+    return os.path.abspath(os.path.expanduser("~/.local/share/midikeep"))
 
 
 @dataclass
@@ -101,6 +242,7 @@ class MidiData:
     sections: List[Section] = field(default_factory=list)
     tempo_bpm: float = 120.0
     key_signature: Optional[str] = None
+    time_signature: Optional[Tuple[int, int, int, int]] = None  # raw 0xFF 0x58 payload (nn, dd, cc, bb)
     tracks: List[TrackInfo] = field(default_factory=list)
     program_changes: List[Tuple[float, int, int]] = field(default_factory=list)  # (time_sec, channel, program)
 GM_PROGRAM_NAMES = (
@@ -311,6 +453,9 @@ class MidiParser:
                         # Marker
                         text = meta_bytes.decode("utf-8", errors="replace")
                         raw_events.append((curr_tick, 1, "marker", text))
+                    elif meta_type == 0x58 and meta_len >= 4:
+                        # Time Signature: numerator, denominator power of two, MIDI clocks per click, 32nds per quarter
+                        raw_events.append((curr_tick, 0, "time_signature", tuple(meta_bytes[:4])))
                     elif meta_type == 0x59 and meta_len >= 2:
                         # Key Signature
                         sf, mi = struct.unpack("bb", meta_bytes[:2])
@@ -369,6 +514,7 @@ class MidiParser:
 
         initial_bpm = 120.0
         bpm_set = False
+        time_signature: Optional[Tuple[int, int, int, int]] = None
 
         for tick, _, etype, payload in raw_events:
             delta_ticks = tick - last_tick
@@ -383,6 +529,9 @@ class MidiParser:
                 if not bpm_set:
                     initial_bpm = bpm
                     bpm_set = True
+            elif etype == "time_signature":
+                if time_signature is None:
+                    time_signature = payload
             elif etype == "track_name":
                 trk_idx, name = payload
                 track_names[trk_idx] = name
@@ -504,6 +653,7 @@ class MidiParser:
             markers=markers,
             sections=sections,
             tempo_bpm=initial_bpm,
+            time_signature=time_signature,
             tracks=tracks,
             program_changes=program_changes
         )
@@ -548,55 +698,107 @@ class MidiParser:
         return sum(end - start for start, end in merged)
 
     @classmethod
-    def write_notes_to_file(cls, notes: List[NoteEvent], output_path: str, tempo_bpm: float = 120.0, time_offset: float = 0.0):
-        """Write note events to a standard Type 0 MIDI file.
-
-        Adjusts start times by subtracting time_offset.
-        """
+    def write_notes_to_bytes(
+        cls,
+        notes: List[NoteEvent],
+        tempo_bpm: float = 120.0,
+        time_offset: float = 0.0,
+        tracks_info: Optional[List[TrackInfo]] = None,
+        time_signature: Optional[Tuple[int, int, int, int]] = None,
+    ) -> bytes:
+        """Encode note events as an SMF Type 1 file: a conductor track, then one track per (track, channel)."""
         ticks_per_quarter = 480
         mpqn = int(round(60_000_000.0 / max(10.0, tempo_bpm)))
         seconds_per_tick = (mpqn / 1_000_000.0) / ticks_per_quarter
-
-        # Build raw events list: (tick, priority, bytes)
-        raw = []
-        # Tempo event at tick 0
         tempo_payload = struct.pack(">BBB", (mpqn >> 16) & 0xFF, (mpqn >> 8) & 0xFF, mpqn & 0xFF)
-        raw.append((0, 0, b"\xFF\x51\x03" + tempo_payload))
 
+        info_map: Dict[Tuple[int, int], TrackInfo] = {}
+        if tracks_info:
+            for ti in tracks_info:
+                info_map[(ti.track_index, ti.channel)] = ti
+
+        # Group notes by (track_index, channel)
+        groups: Dict[Tuple[int, int], List[NoteEvent]] = {}
         for n in notes:
-            rel_start = max(0.0, n.start_time - time_offset)
-            rel_end = max(rel_start + 0.01, n.end_time - time_offset)
+            k = (getattr(n, "track_index", 0), n.channel)
+            if k not in groups:
+                groups[k] = []
+            groups[k].append(n)
 
-            start_tick = int(round(rel_start / seconds_per_tick))
-            end_tick = int(round(rel_end / seconds_per_tick))
-            ch = n.channel & 0x0F
+        sorted_keys = sorted(groups.keys(), key=lambda k: (k[0], k[1]))
 
-            # Note On
-            raw.append((start_tick, 2, bytes([0x90 | ch, n.pitch & 0x7F, n.velocity & 0x7F])))
-            # Note Off
-            raw.append((end_tick, 1, bytes([0x80 | ch, n.pitch & 0x7F, 0])))
+        def _chunk(raw) -> bytes:
+            raw.sort(key=lambda x: (x[0], x[1]))
+            track_bytes = bytearray()
+            last_tick = 0
+            for tick, _, payload in raw:
+                track_bytes.extend(cls._write_vlq(tick - last_tick))
+                track_bytes.extend(payload)
+                last_tick = tick
+            return struct.pack(">4sI", b"MTrk", len(track_bytes)) + bytes(track_bytes)
 
-        # End of track meta event
-        max_tick = max([e[0] for e in raw], default=0)
-        raw.append((max_tick, 3, b"\xFF\x2F\x00"))
+        def _note_events(track_notes: List[NoteEvent]):
+            raw = []
+            for n in track_notes:
+                rel_start = max(0.0, n.start_time - time_offset)
+                rel_end = max(rel_start + 0.01, n.end_time - time_offset)
+                start_tick = int(round(rel_start / seconds_per_tick))
+                end_tick = int(round(rel_end / seconds_per_tick))
+                ch = n.channel & 0x0F
+                raw.append((start_tick, 2, bytes([0x90 | ch, n.pitch & 0x7F, n.velocity & 0x7F])))  # Note On
+                raw.append((end_tick, 1, bytes([0x80 | ch, n.pitch & 0x7F, 0])))  # Note Off
+            return raw
 
-        raw.sort(key=lambda x: (x[0], x[1]))
+        note_tracks = []
+        for key in sorted_keys:
+            raw = []
+            t_info = info_map.get(key)
+            if t_info is not None:
+                if t_info.name:
+                    name_bytes = t_info.name.encode("utf-8")
+                    raw.append((0, 0, b"\xFF\x03" + cls._write_vlq(len(name_bytes)) + name_bytes))
+                raw.append((0, 0, bytes([0xC0 | (t_info.channel & 0x0F), max(0, min(127, t_info.program))])))
+            raw.extend(_note_events(groups[key]))
+            note_tracks.append(raw)
+        end_tick = max((e[0] for raw in note_tracks for e in raw), default=0)
 
-        # Encode track data
-        track_bytes = bytearray()
-        last_tick = 0
-        for tick, _, payload in raw:
-            delta = tick - last_tick
-            track_bytes.extend(cls._write_vlq(delta))
-            track_bytes.extend(payload)
-            last_tick = tick
+        # Always SMF Type 1: a conductor track (tempo, time signature) followed by one named track per
+        # instrument, the layout DAWs and notation programs write and the one Dorico imports reliably.
+        ts = tuple(time_signature) if time_signature and len(time_signature) >= 4 else (4, 2, 24, 8)
+        conductor = [
+            (0, 0, b"\xFF\x51\x03" + tempo_payload),
+            (0, 0, b"\xFF\x58\x04" + bytes(max(0, min(255, int(v))) for v in ts[:4])),
+            (end_tick, 3, b"\xFF\x2F\x00"),
+        ]
+        chunks = [_chunk(conductor)]
+        for raw in note_tracks:
+            raw.append((end_tick, 3, b"\xFF\x2F\x00"))
+            chunks.append(_chunk(raw))
 
-        header = struct.pack(">4sIHHH", b"MThd", 6, 0, 1, ticks_per_quarter)
-        track_chunk = struct.pack(">4sI", b"MTrk", len(track_bytes)) + bytes(track_bytes)
+        header = struct.pack(">4sIHHH", b"MThd", 6, 1, len(chunks), ticks_per_quarter)
+        return header + b"".join(chunks)
 
+    @classmethod
+    def write_notes_to_file(
+        cls,
+        notes: List[NoteEvent],
+        output_path: str,
+        tempo_bpm: float = 120.0,
+        time_offset: float = 0.0,
+        tracks_info: Optional[List[TrackInfo]] = None,
+        time_signature: Optional[Tuple[int, int, int, int]] = None,
+    ):
+        """Write note events to a Standard MIDI File (Type 1, see write_notes_to_bytes).
+
+        Adjusts start times by subtracting time_offset.
+        """
+        midi_bytes = cls.write_notes_to_bytes(
+            notes, tempo_bpm=tempo_bpm, time_offset=time_offset, tracks_info=tracks_info,
+            time_signature=time_signature,
+        )
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         with open(output_path, "wb") as f:
-            f.write(header + track_chunk)
+            f.write(midi_bytes)
 
 
 @dataclass
@@ -629,8 +831,12 @@ class SessionRecord:
 class ArchiveManager:
     """Manages index.db access, live journals, and MIDI exports."""
 
-    def __init__(self, data_dir: Optional[str] = None):
-        self.data_dir = data_dir or get_midikeep_dir()
+    def __init__(self, data_dir: Optional[str] = None, config_path: Optional[str] = None):
+        self.config_path = config_path
+        if data_dir:
+            self.data_dir = os.path.abspath(os.path.expanduser(os.path.expandvars(data_dir)))
+        else:
+            self.data_dir = get_midikeep_dir(config_path=config_path)
         self.root_dir = self.data_dir
         self.db_path = os.path.join(self.data_dir, "index.db")
         self.journal_dir = os.path.join(self.data_dir, "journal")
@@ -653,7 +859,7 @@ class ArchiveManager:
                 with open(test_f, "w") as f:
                     f.write("ok")
                 os.remove(test_f)
-                return c
+                return host_visible_path(c)
             except Exception:
                 continue
         return tempfile.gettempdir()
@@ -673,11 +879,28 @@ class ArchiveManager:
         except Exception:
             return datetime.now()
 
-    @classmethod
-    def _row_to_record(cls, row) -> SessionRecord:
-        st = cls._parse_timestamp(row["start_time"])
+    def _resolve_session_file_path(self, raw_path: str) -> str:
+        """Resolve session file_path, rebasing onto self.data_dir if the archive was relocated."""
+        if not raw_path:
+            return raw_path
+        if os.path.exists(raw_path):
+            return raw_path
+        if not os.path.isabs(raw_path):
+            cand = os.path.join(self.data_dir, raw_path)
+            if os.path.exists(cand):
+                return cand
+        marker = f"{os.sep}sessions{os.sep}"
+        if marker in raw_path:
+            rel_part = "sessions" + os.sep + raw_path.split(marker, 1)[1]
+            cand = os.path.join(self.data_dir, rel_part)
+            if os.path.exists(cand):
+                return cand
+        return raw_path
+
+    def _row_to_record(self, row) -> SessionRecord:
+        st = self._parse_timestamp(row["start_time"])
         try:
-            et = cls._parse_timestamp(row["end_time"])
+            et = self._parse_timestamp(row["end_time"])
         except Exception:
             et = st
 
@@ -689,7 +912,7 @@ class ArchiveManager:
             active_play_seconds=float(row["active_play_seconds"] or 0.0),
             note_count=int(row["note_count"] or 0),
             device_name=row["device_name"] or "Unknown Device",
-            file_path=row["file_path"],
+            file_path=self._resolve_session_file_path(row["file_path"]),
             key_signature=row["key_signature"],
             tempo_bpm=float(row["tempo_bpm"] or 120.0),
             starred=bool(row["starred"]),
@@ -857,26 +1080,58 @@ class ArchiveManager:
         finally:
             conn.close()
 
-    def export_slice(self, notes: List[NoteEvent], start_time: float, end_time: float,
-                     dest_path: str, tempo_bpm: float = 120.0) -> str:
-        """Slice notes overlapping [start_time, end_time] and export to a new MIDI file."""
+    def export_slice(
+        self,
+        notes: List[NoteEvent],
+        start_time: float,
+        end_time: float,
+        dest_path: str,
+        tempo_bpm: float = 120.0,
+        selected_tracks: Optional[Set[Tuple[int, int]]] = None,
+        track_intervals: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]] = None,
+        tracks_info: Optional[List[TrackInfo]] = None,
+        time_signature: Optional[Tuple[int, int, int, int]] = None,
+    ) -> str:
+        """Slice notes overlapping [start_time, end_time] (optionally filtered per track) and export to a MIDI file."""
         sliced_notes = []
         for n in notes:
-            # Check overlap
-            if n.end_time > start_time and n.start_time < end_time:
-                # Clamp within the slice window
-                s = max(start_time, n.start_time)
-                e = min(end_time, n.end_time)
-                sliced_notes.append(NoteEvent(
-                    pitch=n.pitch,
-                    velocity=n.velocity,
-                    start_time=s,
-                    end_time=e,
-                    channel=n.channel,
-                    track_index=n.track_index
-                ))
+            key = (getattr(n, "track_index", 0), n.channel)
+            if selected_tracks is not None and key not in selected_tracks:
+                continue
 
-        MidiParser.write_notes_to_file(sliced_notes, dest_path, tempo_bpm=tempo_bpm, time_offset=start_time)
+            if track_intervals is not None and key in track_intervals:
+                intervals = track_intervals[key]
+            else:
+                intervals = [(start_time, end_time)]
+
+            for iv_start, iv_end in intervals:
+                if n.end_time > iv_start and n.start_time < iv_end:
+                    s = max(iv_start, n.start_time)
+                    e = min(iv_end, n.end_time)
+                    sliced_notes.append(NoteEvent(
+                        pitch=n.pitch,
+                        velocity=n.velocity,
+                        start_time=s,
+                        end_time=e,
+                        channel=n.channel,
+                        track_index=getattr(n, "track_index", 0)
+                    ))
+
+        filtered_info = None
+        if tracks_info:
+            if selected_tracks is not None:
+                filtered_info = [t for t in tracks_info if (t.track_index, t.channel) in selected_tracks]
+            else:
+                filtered_info = list(tracks_info)
+
+        MidiParser.write_notes_to_file(
+            sliced_notes,
+            dest_path,
+            tempo_bpm=tempo_bpm,
+            time_offset=start_time,
+            tracks_info=filtered_info,
+            time_signature=time_signature,
+        )
         return dest_path
 
     def export_file(self, src_file: str, dest_path: str) -> str:
